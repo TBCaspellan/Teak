@@ -1,0 +1,32 @@
+name: Build historical Form4 ticker evidence
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet || true
+          df -h
+      - name: Install dependencies
+        run: python -m pip install duckdb pandas pyarrow 'huggingface_hub[hf_xet]'
+      - name: Build historical ticker evidence
+        run: python build_form4_ticker_evidence.py
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-form4-ticker-evidence
+          path: |
+            historical_ticker_evidence_form4.parquet
+            form4_ticker_evidence_report.json
+          if-no-files-found: warn
+          retention-days: 90
