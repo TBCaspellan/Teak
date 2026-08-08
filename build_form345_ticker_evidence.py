@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-import json
+import json, traceback
 import duckdb
 from huggingface_hub import snapshot_download
 
@@ -8,20 +8,20 @@ from huggingface_hub import snapshot_download
 # Downloading the 4-text corpus again wastes several GB and can exhaust a hosted runner.
 REPOS=['TeraflopAI/3-text','TeraflopAI/5-text']
 FORM4='form4/historical_ticker_evidence_form4.parquet'
-START='2010-01-01'; END='2024-12-31'
 
 
-def main():
+def run():
     if not Path(FORM4).exists():
         raise RuntimeError(f'Frozen Form 4 evidence missing: {FORM4}')
     root=Path('cache/form35_hf'); root.mkdir(parents=True,exist_ok=True)
-    files=[]; source_counts={}
+    files=[]; source_counts={}; source_samples={}
     for repo in REPOS:
         sub=root/repo.split('/')[-1]; sub.mkdir(parents=True,exist_ok=True)
         local=snapshot_download(repo_id=repo,repo_type='dataset',allow_patterns=['*.parquet'],local_dir=sub)
-        fs=sorted(Path(local).glob('*.parquet'))
-        source_counts[repo]=len(fs); files.extend(fs)
-    if not files: raise RuntimeError('No Form 3/5 parquet shards downloaded')
+        # Hugging Face snapshots can preserve nested repository directories.
+        fs=sorted(Path(local).rglob('*.parquet'))
+        source_counts[repo]=len(fs); source_samples[repo]=[str(p) for p in fs[:5]]; files.extend(fs)
+    if not files: raise RuntimeError(f'No Form 3/5 parquet shards downloaded: {source_counts}')
     con=duckdb.connect()
     flist=','.join("'"+str(p).replace("'","''")+"'" for p in files)
     q=f"""
@@ -69,8 +69,18 @@ def main():
       FROM read_parquet('historical_ticker_evidence_form345.parquet')
     """).df().iloc[0].to_dict()
     base=con.execute(f"SELECT count(distinct cik) ciks FROM read_parquet('{FORM4}')").fetchone()[0]
-    report={'status':'PASS','sources':['frozen Form4 artifact']+REPOS,'source_shards':source_counts,
-            'form4_base_ciks':int(base),'stats':{k:str(v) for k,v in stats.items()}}
+    return {'status':'PASS','sources':['frozen Form4 artifact']+REPOS,'source_shards':source_counts,
+            'source_samples':source_samples,'form4_base_ciks':int(base),
+            'stats':{k:str(v) for k,v in stats.items()}}
+
+
+def main():
+    try:
+        report=run()
+    except Exception as e:
+        report={'status':'FAIL','error':f'{type(e).__name__}: {e}','traceback':traceback.format_exc()}
+        Path('form345_ticker_evidence_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+        print(json.dumps(report,indent=2)); raise
     Path('form345_ticker_evidence_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     print(json.dumps(report,indent=2))
 
