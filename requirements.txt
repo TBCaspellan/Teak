@@ -1,3 +1,4 @@
+# Outlier Formula OPEN network runner
 numpy>=1.26
 pandas>=2.2
 statsmodels>=0.14
