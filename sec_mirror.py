@@ -1,26 +1,38 @@
 from __future__ import annotations
 import pandas as pd
 
+REMOTE_DB = "https://huggingface.co/datasets/erlenbusch/sec-edgar/resolve/main/sec_edgar.duckdb"
+
 class SECFinancialStatementMirror:
     """
-    Query the SEC Financial Statement Data Sets through the public
-    Hugging Face / Datapond mirror `erlenbusch/sec-edgar`.
+    Query a public-domain mirror of the SEC Financial Statement Data Sets.
 
-    The underlying data are sourced from the SEC and expose:
-      - submissions.accepted: filing acceptance timestamp
-      - submissions.cik, form, period, filed, fiscal period/year
-      - numbers.tag, ddate, qtrs, uom, value
+    Primary cloud-safe transport is DuckDB HTTP range access directly to the
+    Hugging Face-hosted `sec_edgar.duckdb`. This avoids SEC's 403 block on
+    GitHub/Azure IP ranges and avoids downloading the full 5.28 GB database.
 
-    This is used when SEC blocks cloud-hosted IP addresses. It avoids changing
-    the OPEN economic model; only the transport layer changes.
+    Underlying fields retain SEC provenance, including `submissions.accepted`.
     """
-    def __init__(self):
-        import datapond
-        self.con = datapond.connect("sec_edgar")
+    def __init__(self, remote_url=REMOTE_DB):
+        import duckdb
+        self.con = duckdb.connect()
+        self.con.execute("INSTALL httpfs")
+        self.con.execute("LOAD httpfs")
+        # Increase remote timeout/retries for range requests through HF/Xet.
+        self.con.execute("SET http_timeout=120")
+        self.con.execute("SET http_retries=5")
+        safe = remote_url.replace("'", "''")
+        self.con.execute(f"ATTACH '{safe}' AS sec (READ_ONLY)")
 
     @staticmethod
     def cik10(cik):
         return str(cik).strip().zfill(10)
+
+    def _q(self, sql):
+        # Qualify database schema explicitly; the mirrored DB uses main schema.
+        sql = sql.replace("FROM submissions", "FROM sec.main.submissions")
+        sql = sql.replace("JOIN numbers", "JOIN sec.main.numbers")
+        return self.con.execute(sql).df()
 
     def fundamentals(self, cik, start_period, end_period, tags=None):
         cik = self.cik10(cik)
@@ -54,7 +66,7 @@ class SECFinancialStatementMirror:
           AND n.coreg IS NULL
         ORDER BY s.accepted, n.ddate, n.tag
         """
-        return self.con.execute(sql).df()
+        return self._q(sql)
 
     def acceptance_history(self, cik, start_period, end_period):
         cik = self.cik10(cik)
@@ -67,4 +79,4 @@ class SECFinancialStatementMirror:
                          AND DATE '{pd.Timestamp(end_period).date()}'
         ORDER BY accepted
         """
-        return self.con.execute(sql).df()
+        return self._q(sql)
