@@ -1,0 +1,32 @@
+name: Engo raw semantics probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'engo_raw_semantics_probe.py'
+      - '.github/workflows/engo-raw-semantics-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install requests
+      - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - run: python engo_raw_semantics_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engo-raw-semantics-probe
+          path: engo_raw_semantics_probe/
+          if-no-files-found: warn
