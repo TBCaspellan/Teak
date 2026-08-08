@@ -1,12 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-import os
+import os,random,time
 import numpy as np
 import pandas as pd
 import requests
 
 BASE_URL='https://engo.capital'
+TRANSIENT_HTTP={429,500,502,503,504}
 
 class EngoAuthError(RuntimeError): pass
 class EngoDataError(RuntimeError): pass
@@ -16,17 +17,35 @@ class EngoPriceProvider:
     api_key: str|None=None
     cache_dir: str='cache/engo'
     timeout: int=60
+    max_retries: int=6
     def __post_init__(self):
         self.api_key=self.api_key or os.environ.get('ENGO_API_KEY')
         if not self.api_key: raise EngoAuthError('ENGO_API_KEY is required')
         self.cache=Path(self.cache_dir); self.cache.mkdir(parents=True,exist_ok=True)
-        self.s=requests.Session(); self.s.headers.update({'Authorization':f'Bearer {self.api_key}'})
+        self.s=requests.Session(); self.s.headers.update({'Authorization':f'Bearer {self.api_key}','User-Agent':'Teak-OPEN/1.0'})
     def _get(self,path,params=None,accept=None,allow_404=False):
         h={'Accept':accept} if accept else None
-        r=self.s.get(BASE_URL+path,params=params,headers=h,timeout=self.timeout)
-        if allow_404 and r.status_code==404:return None
-        if r.status_code in (401,403): raise EngoAuthError(f'HTTP {r.status_code}')
-        r.raise_for_status(); return r
+        last=None
+        for attempt in range(self.max_retries):
+            try:
+                r=self.s.get(BASE_URL+path,params=params,headers=h,timeout=self.timeout)
+                if allow_404 and r.status_code==404:return None
+                if r.status_code in (401,403): raise EngoAuthError(f'HTTP {r.status_code}')
+                if r.status_code in TRANSIENT_HTTP:
+                    last=requests.HTTPError(f'{r.status_code} Server Error: {r.reason} for url: {r.url}',response=r)
+                    if attempt+1>=self.max_retries:raise last
+                    retry_after=r.headers.get('Retry-After')
+                    try:delay=float(retry_after) if retry_after is not None else min(18.0,1.25*(2**attempt))
+                    except Exception:delay=min(18.0,1.25*(2**attempt))
+                    time.sleep(delay+random.uniform(0.15,0.85));continue
+                r.raise_for_status();return r
+            except EngoAuthError:raise
+            except (requests.Timeout,requests.ConnectionError) as e:
+                last=e
+                if attempt+1>=self.max_retries:raise
+                time.sleep(min(18.0,1.25*(2**attempt))+random.uniform(0.15,0.85))
+        if last is not None:raise last
+        raise EngoDataError(f'Engo request failed without response: {path}')
     def me(self): return self._get('/api/v1/me').json()
     def symbol_book(self,refresh=False):
         p=self.cache/'symbols.parquet'
@@ -42,9 +61,8 @@ class EngoPriceProvider:
           close         = total-return adjusted close
           volume        = split-adjusted volume
 
-        Production raw close is therefore reconstructed in `raw_history`; `close`
-        must never be used directly as raw close for market-cap or dollar-volume
-        features.
+        Production raw close is reconstructed in `raw_history`; `close` is never
+        used directly as raw close for market-cap or dollar-volume features.
         """
         params={}
         if start is not None: params['from']=str(pd.Timestamp(start).date())
@@ -118,9 +136,6 @@ class EngoPriceProvider:
         z['raw_close']=s*p
         z['raw_volume']=z['split_adj_volume']/pd.Series(p,index=z.index,dtype=float).replace(0,np.nan)
         z['raw_reconstruction_method']='BACKWARD_TOTAL_RETURN_TO_SPLIT_ONLY_THEN_RAW'
-
-        # Hard production tripwire inherited from Step 3. Missing action records are
-        # allowed only when the reconstructed series still satisfies raw OHLC.
         if {'low','high'} <= set(z.columns):
             v=z[['low','high','raw_close']].dropna();v=v[v['high']>=v['low']]
             if len(v):
@@ -139,13 +154,11 @@ class EngoPriceProvider:
     def raw_history(self,ticker,start=None,end=None):
         """
         Reconstruct as-traded raw close and raw volume while retaining Engo's
-        total-return adjusted close for return calculations.
-
-        The full available series and current corporate-action record are used only
-        as normalization metadata to invert vendor back-adjustments. Corporate-action
-        events themselves are never exposed as predictive model features.
+        total-return adjusted close for return calculations. The request runs through
+        the vendor's latest available bar (no artificial 2099 endpoint) so current
+        split/dividend metadata can safely invert historical back-adjustments.
         """
-        x=self._eod(ticker,start,'2099-12-31')
+        x=self._eod(ticker,start,None)
         if x.empty:return x
         z=self._reconstruct_raw(x,self.actions(ticker),str(ticker).upper())
         if start is not None:z=z[z.date>=pd.Timestamp(start)]
