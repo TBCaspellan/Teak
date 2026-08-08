@@ -1,0 +1,84 @@
+name: Step 11 prospective live shadow validation
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 22 * * 1-5'
+  push:
+    paths:
+      - '.github/workflows/step11-prospective-shadow.yml'
+      - 'step11_prospective_shadow.py'
+      - 'step11_prospective_protocol.json'
+permissions:
+  contents: write
+  actions: read
+jobs:
+  protocol-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Prove frozen formula/data engine unchanged since blind-validation freeze
+        run: |
+          git diff --exit-code c781f4e66a4d81636b3f3a4e998743b056cb577a -- \
+            config_open_core.py open_core_runtime.py open_core_engine.py fsd_quarterly.py engo_provider.py
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install numpy pandas pyarrow requests
+      - name: Validate pre-registered prospective protocol without accessing outcomes
+        run: python step11_prospective_shadow.py setup-check
+
+  live-shadow:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: protocol-setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+      SEC_EDGAR_DUCKDB: cache/sec/sec_edgar.duckdb
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Re-prove frozen core before every prospective observation
+        run: |
+          git diff --exit-code c781f4e66a4d81636b3f3a4e998743b056cb577a -- \
+            config_open_core.py open_core_runtime.py open_core_engine.py fsd_quarterly.py engo_provider.py
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install numpy pandas pyarrow duckdb requests huggingface_hub hf_xet
+      - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - id: clock
+        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: sec-cache
+        with:
+          path: cache/sec/sec_edgar.duckdb
+          key: sec-edgar-duckdb-prospective-${{ steps.clock.outputs.month }}-v1
+      - name: Refresh local SEC filing database on monthly cache miss
+        if: steps.sec-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p cache/sec
+          python - <<'PY'
+          from huggingface_hub import hf_hub_download
+          print(hf_hub_download(repo_id='erlenbusch/sec-edgar',repo_type='dataset',filename='sec_edgar.duckdb',local_dir='cache/sec'))
+          PY
+          test -s "$SEC_EDGAR_DUCKDB"
+      - name: Download frozen official FF48 mapping
+        run: |
+          mkdir -p ff48
+          gh api /repos/${{ github.repository }}/actions/artifacts/9014929943/zip > ff48.zip
+          unzip -q ff48.zip -d ff48
+          test -f ff48/ff48_sic_map.parquet
+      - name: Capture any due shadow snapshot and evaluate only matured outcomes
+        run: python step11_prospective_shadow.py scheduled
+      - name: Commit immutable prospective snapshots and matured evidence
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add prospective_snapshots prospective_evidence 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo 'No new prospective state to commit.'
+          else
+            git commit -m 'Archive Step 11 prospective shadow state'
+            git push
+          fi
