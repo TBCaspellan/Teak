@@ -2,6 +2,11 @@ name: Build historical Form4 ticker evidence
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'build_form4_ticker_evidence.py'
+      - '.github/workflows/build-form4-ticker-evidence.yml'
 
 jobs:
   build:
