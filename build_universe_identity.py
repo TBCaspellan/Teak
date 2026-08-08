@@ -6,7 +6,7 @@ import pandas as pd
 from sec_mirror import SECFinancialStatementMirror
 from engo_provider import EngoPriceProvider
 
-FORM4_PATH='form4/historical_ticker_evidence_form4.parquet'
+EVIDENCE_PATH='form345/historical_ticker_evidence_form345.parquet'
 START='2012-01-01'
 END='2024-12-31'
 
@@ -25,11 +25,11 @@ def signal_dates_from_spy(provider):
 
 def main():
     outdir=Path('universe_identity'); outdir.mkdir(exist_ok=True)
-    f4=pd.read_parquet(FORM4_PATH)
-    f4['cik']=f4['cik'].astype(str).str.zfill(10)
-    f4['ticker']=f4['ticker'].astype(str).str.upper().str.strip()
-    f4['evidence_date']=pd.to_datetime(f4['evidence_date'],errors='coerce').dt.normalize()
-    f4=f4.dropna(subset=['cik','ticker','evidence_date']).sort_values(['cik','evidence_date','ticker'])
+    evall=pd.read_parquet(EVIDENCE_PATH)
+    evall['cik']=evall['cik'].astype(str).str.replace(r'\D','',regex=True).str.zfill(10)
+    evall['ticker']=evall['ticker'].astype(str).str.upper().str.strip()
+    evall['evidence_date']=pd.to_datetime(evall['evidence_date'],errors='coerce').dt.normalize()
+    evall=evall.dropna(subset=['cik','ticker','evidence_date']).sort_values(['cik','evidence_date','ticker'])
 
     engo=EngoPriceProvider()
     book=engo.symbol_book()
@@ -53,7 +53,7 @@ def main():
     ORDER BY accepted
     """
     subs=sec.con.execute(q).df()
-    subs['cik']=subs['cik'].astype(str).str.replace(r'\\D','',regex=True).str.zfill(10)
+    subs['cik']=subs['cik'].astype(str).str.replace(r'\D','',regex=True).str.zfill(10)
     subs['accepted']=pd.to_datetime(subs['accepted'],errors='coerce')
     subs['period']=pd.to_datetime(subs['period'],errors='coerce')
     subs['sic']=pd.to_numeric(subs['sic'],errors='coerce')
@@ -69,9 +69,9 @@ def main():
         cand=cand.sort_values(['cik','accepted']).groupby('cik',as_index=False).tail(1)
         sec_n=len(cand)
 
-        # Historical ticker evidence is carried forward until contradictory later evidence.
+        # Historical identity evidence is carried forward until contradicted.
         # Date-only evidence on the signal date is conservatively unavailable until next session.
-        ev=f4[f4['evidence_date']<sd].copy()
+        ev=evall[evall['evidence_date']<sd].copy()
         ev=ev.sort_values(['cik','evidence_date','ticker']).groupby('cik',as_index=False).tail(1)
         m=cand.merge(ev[['cik','ticker','evidence_date','issuer_name','evidence_source']],on='cik',how='left')
         hist_n=int(m['ticker'].notna().sum())
@@ -101,6 +101,7 @@ def main():
     eligible=panel[panel['identity_eligible']]
     report={
         'status':'PASS' if len(eligible) else 'FAIL',
+        'identity_evidence':'FORM345_HF_HISTORICAL',
         'signal_dates':len(signals),
         'panel_rows':len(panel),
         'eligible_rows':len(eligible),
