@@ -6,6 +6,10 @@ on:
       - '.github/workflows/feature-coverage-local-sec.yml'
       - 'feature_coverage_audit_local.py'
       - 'sec_local_mirror.py'
+      - 'engo_provider.py'
+      - 'fsd_quarterly.py'
+      - 'open_core_runtime.py'
+      - 'open_core_engine.py'
 permissions:
   contents: read
   actions: read
