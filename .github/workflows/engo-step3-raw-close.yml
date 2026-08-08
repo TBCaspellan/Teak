@@ -1,0 +1,28 @@
+name: Engo Step 3 raw close reconstruction
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'engo_step3_raw_close_probe.py'
+      - '.github/workflows/engo-step3-raw-close.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install numpy pandas pyarrow requests
+      - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - run: python engo_step3_raw_close_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engo-step3-raw-close
+          path: engo_step3_raw_close/
+          if-no-files-found: warn
