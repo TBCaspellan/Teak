@@ -17,11 +17,12 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
       GH_TOKEN: ${{ github.token }}
       SEC_EDGAR_DUCKDB: cache/sec/sec_edgar.duckdb
+      ENGO_WORKERS: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
