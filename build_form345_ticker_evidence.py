@@ -18,7 +18,6 @@ def run():
     for repo in REPOS:
         sub=root/repo.split('/')[-1]; sub.mkdir(parents=True,exist_ok=True)
         local=snapshot_download(repo_id=repo,repo_type='dataset',allow_patterns=['*.parquet'],local_dir=sub)
-        # Hugging Face snapshots can preserve nested repository directories.
         fs=sorted(Path(local).rglob('*.parquet'))
         source_counts[repo]=len(fs); source_samples[repo]=[str(p) for p in fs[:5]]; files.extend(fs)
     if not files: raise RuntimeError(f'No Form 3/5 parquet shards downloaded: {source_counts}')
@@ -63,11 +62,12 @@ def run():
     ) TO 'historical_ticker_evidence_form345.parquet' (FORMAT PARQUET, COMPRESSION ZSTD)
     """
     con.execute(q)
-    stats=con.execute("""
+    row=con.execute("""
       SELECT count(*) row_count,count(distinct cik) cik_count,count(distinct ticker) ticker_count,
              min(evidence_date) first_date,max(evidence_date) last_date
       FROM read_parquet('historical_ticker_evidence_form345.parquet')
-    """).df().iloc[0].to_dict()
+    """).fetchone()
+    stats=dict(zip(['row_count','cik_count','ticker_count','first_date','last_date'],row))
     base=con.execute(f"SELECT count(distinct cik) ciks FROM read_parquet('{FORM4}')").fetchone()[0]
     return {'status':'PASS','sources':['frozen Form4 artifact']+REPOS,'source_shards':source_counts,
             'source_samples':source_samples,'form4_base_ciks':int(base),
