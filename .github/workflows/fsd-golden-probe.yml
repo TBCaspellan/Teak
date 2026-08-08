@@ -1,0 +1,27 @@
+name: OPEN SEC FSD quarterly golden probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fsd-golden-probe.yml'
+      - 'fsd_golden_probe.py'
+      - 'fsd_quarterly.py'
+      - 'sec_mirror.py'
+permissions:
+  contents: read
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow duckdb
+      - run: python fsd_golden_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fsd-quarterly-golden-probe
+          path: fsd_golden/
+          if-no-files-found: warn
