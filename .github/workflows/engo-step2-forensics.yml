@@ -1,0 +1,28 @@
+name: Engo Step 2 split dividend forensics
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'engo_step2_forensics.py'
+      - '.github/workflows/engo-step2-forensics.yml'
+permissions:
+  contents: read
+jobs:
+  forensic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas requests
+      - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - run: python engo_step2_forensics.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engo-step2-forensics
+          path: engo_step2_forensics/
+          if-no-files-found: warn
