@@ -22,15 +22,12 @@ CONCEPTS = {
     'lt_debt_noncurrent_q': ('instant','USD',['LongTermDebtNoncurrent','LongTermDebtAndFinanceLeaseObligationsNoncurrent']),
     'lt_debt_total_q': ('instant','USD',['LongTermDebt']),
     'shares_q': ('instant','shares',['EntityCommonStockSharesOutstanding','CommonStockSharesOutstanding','SharesOutstanding']),
-    # Scale anchor only. It is never substituted for point-in-time shares.
     'shares_basic_anchor': ('average','shares',['WeightedAverageNumberOfSharesOutstandingBasic']),
 }
 TAG_LOOKUP={tag:(concept,kind,uom,p) for concept,(kind,uom,tags) in CONCEPTS.items() for p,tag in enumerate(tags)}
 FP_ORDER={'Q1':1,'Q2':2,'Q3':3,'Q4':4,'FY':4}
 
-
 def signal_close(signal_date):return pd.Timestamp(f'{pd.Timestamp(signal_date).date()} 16:00:00')
-
 
 def canonical_filing_facts(facts):
     if facts.empty:return pd.DataFrame()
@@ -59,7 +56,6 @@ def canonical_filing_facts(facts):
     x=x.sort_values(['adsh','concept','qtrs_rank','period_diff_days','tag_priority','tag']).drop_duplicates(['adsh','concept'],keep='first')
     x['value']=pd.to_numeric(x['value'],errors='coerce');return x
 
-
 def _derive_debt(row):
     st=row.get('short_debt_total_q',np.nan);clt=row.get('current_lt_debt_q',np.nan);sb=row.get('short_borrowings_q',np.nan)
     cur=float(st) if pd.notna(st) else (float(sum(v for v in (clt,sb) if pd.notna(v))) if any(pd.notna(v) for v in (clt,sb)) else np.nan)
@@ -67,12 +63,10 @@ def _derive_debt(row):
     lt=float(non) if pd.notna(non) else (max(float(total)-(cur if pd.notna(cur) else 0),0.0) if pd.notna(total) else np.nan)
     return cur,lt
 
-
 def _sequence_ok(prev_row,row):
     if prev_row is None:return False
     expected=(int(prev_row['fqtr'])%4)+1;days=(pd.Timestamp(row['period'])-pd.Timestamp(prev_row['period'])).days
     return int(row['fqtr'])==expected and 60<=days<=125
-
 
 def _normalize_share_scale(q):
     q=q.copy();q['shares_scale_factor']=np.nan
@@ -88,7 +82,6 @@ def _normalize_share_scale(q):
             if not (0.20<=ratio<=5.0):factor=1.0
         q.at[i,'shares_q']=float(sh)*factor;q.at[i,'shares_scale_factor']=factor
     return q
-
 
 def quarterly_history_asof(facts,signal_date):
     if facts.empty:return pd.DataFrame()
@@ -125,9 +118,7 @@ def quarterly_history_asof(facts,signal_date):
             stand.append(np.nan)
         q[concept]=stand
 
-    # Some issuers report GrossProfit but not a separate cost-of-revenue concept.
-    # This is an accounting identity, not an imputation: COGS = Revenue - GrossProfit.
-    if 'gross_profit_q' in q:
+    if {'gross_profit_q','revenue_q'} <= set(q.columns):
         if 'cogs_q' not in q:q['cogs_q']=np.nan
         mask=q['cogs_q'].isna() & q['revenue_q'].notna() & q['gross_profit_q'].notna()
         q.loc[mask,'cogs_q']=q.loc[mask,'revenue_q']-q.loc[mask,'gross_profit_q']
