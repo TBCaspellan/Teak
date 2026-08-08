@@ -23,6 +23,51 @@ PRIMARY_SCORES = ('OFS_A_OPEN','OFS_B_OPEN')
 HORIZONS = (21,63,126,252)
 SEED = 20260808
 
+# Keep the production core byte-for-byte frozen. Step 10 exposed an old pandas
+# edge case in canonical_filing_facts: after valid PIT filtering, a company can
+# have zero usable canonical rows and DataFrame.apply(axis=1) on that empty frame
+# may return an empty DataFrame rather than a Series. The intended semantic result
+# is simply "no quarterly history". This wrapper handles only that proven-empty
+# edge case; any non-empty candidate set or any other exception is re-raised.
+_ORIGINAL_QHA = s7.quarterly_history_asof
+
+def _safe_quarterly_history_asof(facts, signal_date):
+    try:
+        return _ORIGINAL_QHA(facts, signal_date)
+    except ValueError as e:
+        msg = str(e)
+        if 'Cannot set a DataFrame with multiple columns to the single column qtrs_rank' not in msg:
+            raise
+        x = facts.copy()
+        if x.empty:
+            return pd.DataFrame()
+        for c in ('period','ddate','accepted','filed'):
+            if c in x:
+                x[c] = pd.to_datetime(x[c], errors='coerce')
+        cutoff = pd.Timestamp(f'{pd.Timestamp(signal_date).date()} 16:00:00')
+        x = x[x['accepted'] <= cutoff].copy()
+        if x.empty:
+            return pd.DataFrame()
+        x['fp'] = x['fp'].astype(str).str.upper().str.strip()
+        x['qnum'] = x['fp'].map(s7.FP_ORDER) if hasattr(s7, 'FP_ORDER') else x['fp'].map({'Q1':1,'Q2':2,'Q3':3,'Q4':4,'FY':4})
+        x = x[x['qnum'].notna() & x['tag'].isin(s7.TAG_LOOKUP)].copy()
+        if 'coreg' in x:
+            x = x[x['coreg'].isna()]
+        if 'segments' in x:
+            x = x[x['segments'].isna() | x['segments'].astype(str).isin(['','nan','None'])]
+        if x.empty:
+            return pd.DataFrame()
+        mapped = x['tag'].map(s7.TAG_LOOKUP)
+        x['expected_uom'] = [m[2] for m in mapped]
+        x = x[x['uom'].astype(str).str.lower() == x['expected_uom'].str.lower()].copy()
+        x['period_diff_days'] = (x['ddate'] - x['period']).dt.days.abs()
+        x = x[x['period_diff_days'] <= 45].copy()
+        if x.empty:
+            return pd.DataFrame()
+        # A non-empty candidate set means this is not the known empty-frame edge
+        # case, so fail closed rather than masking a real data-engine problem.
+        raise
+
 
 def configure():
     s7.SIGNALS = HOLDOUT_SIGNALS
@@ -30,6 +75,7 @@ def configure():
     s7.KNOWN_STEP6_SIGNAL = SENTINEL_KNOWN_SIGNAL
     s7.FEATURE_DIR = FEATURE_DIR
     s7.OUTDIR = OUTDIR
+    s7.quarterly_history_asof = _safe_quarterly_history_asof
 
 
 def build_features():
@@ -45,6 +91,8 @@ def build_features():
         'all_holdout_signals_unused_in_steps_6_to_9':True,
         'known_step6_signal_excluded_from_primary_inference':None,
         'PRIMARY_INFERENCE_IS_NEW_DECEMBER_HOLDOUT_ONLY':True,
+        'FROZEN_CORE_MODIFIED_FOR_EDGE_CASE':False,
+        'STEP10_EMPTY_CANONICAL_CANDIDATE_WRAPPER_ACTIVE':True,
     })
     (FEATURE_DIR/'step10_feature_manifest.json').write_text(json.dumps(r,indent=2,default=str),encoding='utf-8')
     print(json.dumps(r,indent=2,default=str))
@@ -150,6 +198,8 @@ def accumulate():
         'outcome_coverage':base.get('outcome_coverage'),
         'transport_error_tickers':base.get('transport_error_tickers'),
         'FORMULA_FROZEN':True,
+        'FROZEN_CORE_MODIFIED_FOR_EDGE_CASE':False,
+        'STEP10_EMPTY_CANONICAL_CANDIDATE_WRAPPER_ACTIVE':True,
         'WEIGHT_OPTIMIZATION_PERFORMED':False,
         'THRESHOLD_OPTIMIZATION_PERFORMED':False,
         'HORIZON_OPTIMIZATION_PERFORMED':False,
