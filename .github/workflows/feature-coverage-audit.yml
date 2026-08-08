@@ -1,15 +1,6 @@
-name: OPEN-Core pre-outcome feature coverage audit
+name: OPEN-Core remote SEC transport diagnostic
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/feature-coverage-audit.yml'
-      - 'feature_coverage_audit.py'
-      - 'open_core_engine.py'
-      - 'open_core_runtime.py'
-      - 'fsd_quarterly.py'
-      - 'engo_provider.py'
-      - 'config_open_core.py'
 permissions:
   contents: read
   actions: read
@@ -26,6 +17,8 @@ jobs:
         with: {python-version: '3.12'}
       - run: python -m pip install numpy pandas pyarrow duckdb requests
       - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - name: Diagnostic only - remote SEC transport is not the production gate
+        run: echo 'This workflow tests the remote SEC/Hugging Face transport only. feature-coverage-local-sec.yml is the canonical production pre-outcome gate.'
       - name: Download frozen Form345 identity universe
         run: |
           mkdir -p identity
@@ -38,11 +31,11 @@ jobs:
           gh api /repos/${{ github.repository }}/actions/artifacts/9014929943/zip > ff48.zip
           unzip -q ff48.zip -d ff48
           test -f ff48/ff48_sic_map.parquet
-      - name: Build features only on latest audited head; no forward outcomes
+      - name: Run remote transport diagnostic; no forward outcomes
         run: python feature_coverage_audit.py
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: open-core-feature-coverage-audit
+          name: open-core-remote-sec-transport-diagnostic
           path: feature_coverage_audit/
           if-no-files-found: warn
