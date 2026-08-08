@@ -12,9 +12,13 @@ SYMBOLS=['RNOW','LEH','SHLD','SHLDQ','YHOO','AABA','BBI','EK','EKDKQ','TWTR','SI
 def main():
     api=HfApi()
     files=api.list_repo_files(REPO,repo_type='dataset')
+    interesting=[f for f in files if any(k in f.lower() for k in ('delist','unified','us_','parquet'))]
     hits=[f for f in files if f.endswith('/'+TARGET) or f==TARGET]
     if len(hits)!=1:
-        raise RuntimeError(f'Expected one {TARGET}; found {hits}')
+        out={'status':'PATH_DISCOVERY','repo':REPO,'file_count':len(files),'interesting_files':interesting[:500],'all_files':files[:500]}
+        Path('jinjing_delisted_probe_report.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
+        print(json.dumps(out,indent=2))
+        return
     repo_path=hits[0]
     local=hf_hub_download(repo_id=REPO,repo_type='dataset',filename=repo_path,local_dir='cache/jinjing')
 
