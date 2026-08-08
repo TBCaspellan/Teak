@@ -24,8 +24,6 @@ def main():
 
     con=duckdb.connect()
     flist=','.join("'"+str(p).replace("'","''")+"'" for p in files)
-    # Monthly observations retain real historical ticker evidence without carrying
-    # all ~4.7M duplicate Form 4 rows forward.
     q=f"""
     COPY (
       WITH parsed AS (
@@ -59,8 +57,11 @@ def main():
     """
     con.execute(q)
     stats=con.execute("""
-      SELECT count(*) rows, count(distinct cik) ciks, count(distinct ticker) tickers,
-             min(evidence_date) first_date, max(evidence_date) last_date
+      SELECT count(*) AS row_count,
+             count(distinct cik) AS cik_count,
+             count(distinct ticker) AS ticker_count,
+             min(evidence_date) AS first_date,
+             max(evidence_date) AS last_date
       FROM read_parquet('historical_ticker_evidence_form4.parquet')
     """).df().iloc[0].to_dict()
     probes=con.execute("""
@@ -68,8 +69,9 @@ def main():
       WHERE cik IN ('0001111247','0000806085','0001108524')
       ORDER BY cik,evidence_date
     """).df()
+    probes.to_csv('golden_form4_ticker_probes.csv',index=False)
     report={'status':'PASS','source':REPO,'parquet_shards':len(files),'stats':{k:str(v) for k,v in stats.items()},
-            'golden_probes':probes.astype(str).to_dict(orient='records')[-50:]}
+            'golden_probes':probes.astype(str).to_dict(orient='records')[-100:]}
     Path('form4_ticker_evidence_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     print(json.dumps(report,indent=2))
 
