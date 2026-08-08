@@ -4,18 +4,36 @@ import pandas as pd
 
 # Public OPEN canonicalization of standard US-GAAP / DEI concepts.
 # Priority is explicit and frozen before any forward-return inspection.
+#
+# The low-priority service tags below were added only after a pre-outcome taxonomy
+# golden audit showed Salesforce migrated away from generic Revenues/CostOfRevenue.
+# We do NOT sum arbitrary product/service components or infer proprietary tags.
 CONCEPTS = {
     'revenue_q': ('pnl','USD', [
         'RevenueFromContractWithCustomerExcludingAssessedTax',
-        'SalesRevenueNet','Revenues']),
+        'SalesRevenueNet',
+        'Revenues',
+        'SalesRevenueServicesNet',
+    ]),
     'cogs_q': ('pnl','USD', [
-        'CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsSold']),
+        'CostOfRevenue',
+        'CostOfGoodsAndServicesSold',
+        'CostOfGoodsSold',
+        'CostOfServices',
+        'CostOfServiceRevenue',
+    ]),
     'op_income_q': ('pnl','USD',['OperatingIncomeLoss']),
     'net_income_q': ('pnl','USD',['NetIncomeLoss','ProfitLoss']),
     'interest_q': ('pnl','USD',[
-        'InterestExpenseNonOperating','InterestExpenseDebt','InterestAndDebtExpense']),
-    'cfo_q': ('ytd','USD',['NetCashProvidedByUsedInOperatingActivities']),
-    'capex_q': ('ytd','USD',['PaymentsToAcquirePropertyPlantAndEquipment']),
+        'InterestExpenseNonOperating','InterestExpenseDebt','InterestAndDebtExpense','InterestExpense']),
+    'cfo_q': ('ytd','USD',[
+        'NetCashProvidedByUsedInOperatingActivities',
+        'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations',
+    ]),
+    'capex_q': ('ytd','USD',[
+        'PaymentsToAcquirePropertyPlantAndEquipment',
+        'PaymentsToAcquireProductiveAssets',
+    ]),
     'assets_q': ('instant','USD',['Assets']),
     'cash_q': ('instant','USD',[
         'CashAndCashEquivalentsAtCarryingValue',
@@ -29,7 +47,11 @@ CONCEPTS = {
     'lt_debt_noncurrent_q': ('instant','USD',[
         'LongTermDebtNoncurrent','LongTermDebtAndFinanceLeaseObligationsNoncurrent']),
     'lt_debt_total_q': ('instant','USD',['LongTermDebt']),
-    'shares_q': ('instant','shares',['EntityCommonStockSharesOutstanding']),
+    'shares_q': ('instant','shares',[
+        'EntityCommonStockSharesOutstanding',
+        'CommonStockSharesOutstanding',
+        'SharesOutstanding',
+    ]),
 }
 
 TAG_LOOKUP={}
@@ -43,10 +65,6 @@ def signal_close(signal_date):
     return pd.Timestamp(f'{pd.Timestamp(signal_date).date()} 16:00:00')
 
 
-def _period_distance_days(ddate, period):
-    return abs((pd.Timestamp(ddate)-pd.Timestamp(period)).days)
-
-
 def canonical_filing_facts(facts: pd.DataFrame) -> pd.DataFrame:
     """
     Select one canonical fact per accession/concept for the filing's current period.
@@ -57,6 +75,7 @@ def canonical_filing_facts(facts: pd.DataFrame) -> pd.DataFrame:
     - cash-flow concepts prefer YTD qtrs=1/2/3 and annual qtrs=4.
     - dimensional/segment facts are excluded; consolidated coreg must be null.
     - current-period ddate must be near SUB.period (<=45 days after SEC month-end rounding).
+    - alias priority is deterministic and source-generic; no company-specific tag mapping.
     """
     if facts.empty: return pd.DataFrame()
     x=facts.copy()
@@ -170,7 +189,6 @@ def quarterly_history_asof(facts: pd.DataFrame, signal_date) -> pd.DataFrame:
             if pd.notna(pval) and pd.notna(pqt) and int(pqt)==fq-1:
                 out.append(float(val-pval))
             elif fq==4:
-                # Fallback only when Q1-Q3 standalones are all known.
                 prior_idx=q.index[(q['fy'].eq(fy)) & (q['fqtr'].isin([1,2,3])) & (q.index<i)]
                 prior_vals=[out[list(q.index).index(jj)] for jj in prior_idx]
                 out.append(float(val-sum(prior_vals)) if len(prior_vals)==3 and all(pd.notna(v) for v in prior_vals) else np.nan)
@@ -178,7 +196,6 @@ def quarterly_history_asof(facts: pd.DataFrame, signal_date) -> pd.DataFrame:
                 out.append(np.nan)
         q[concept]=out
 
-    # Canonical debt derived from explicit components after instant selection.
     debts=q.apply(_derive_debt,axis=1)
     q['curr_debt_q']=[d[0] for d in debts]
     q['lt_debt_q']=[d[1] for d in debts]
