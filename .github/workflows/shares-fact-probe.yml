@@ -1,0 +1,25 @@
+name: SEC FSD share-count probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/shares-fact-probe.yml'
+      - 'shares_fact_probe.py'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow duckdb
+      - run: python shares_fact_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shares-fact-probe
+          path: shares_fact_probe.json
+          if-no-files-found: warn
