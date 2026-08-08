@@ -1,4 +1,4 @@
-name: OPEN-Core feature QA with local SEC database
+name: OPEN-Core canonical pre-outcome production gate
 on:
   workflow_dispatch:
   push:
@@ -10,6 +10,7 @@ on:
       - 'fsd_quarterly.py'
       - 'open_core_runtime.py'
       - 'open_core_engine.py'
+      - 'config_open_core.py'
 permissions:
   contents: read
   actions: read
@@ -27,12 +28,13 @@ jobs:
         with: {python-version: '3.12'}
       - run: python -m pip install numpy pandas pyarrow duckdb requests huggingface_hub hf_xet
       - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
-      - uses: actions/cache@v4
+      - name: Restore canonical local SEC database cache
+        uses: actions/cache@v4
         id: sec-cache
         with:
           path: cache/sec/sec_edgar.duckdb
           key: sec-edgar-duckdb-20260808-v1
-      - name: Download local SEC DuckDB if not cached
+      - name: Bootstrap local SEC DuckDB only on cache miss
         if: steps.sec-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p cache/sec
@@ -42,20 +44,25 @@ jobs:
           print(p)
           PY
           test -f cache/sec/sec_edgar.duckdb
+      - name: Verify local SEC database before feature construction
+        run: test -s "$SEC_EDGAR_DUCKDB"
       - name: Download frozen Form345 identity universe
         run: |
           mkdir -p identity
           gh api /repos/${{ github.repository }}/actions/artifacts/9014898518/zip > identity.zip
           unzip -q identity.zip -d identity
-      - name: Download official FF48
+          test -f identity/universe_identity_panel.parquet
+      - name: Download frozen official FF48 map
         run: |
           mkdir -p ff48
           gh api /repos/${{ github.repository }}/actions/artifacts/9014929943/zip > ff48.zip
           unzip -q ff48.zip -d ff48
-      - run: python feature_coverage_audit_local.py
+          test -f ff48/ff48_sic_map.parquet
+      - name: Run canonical integrated feature gate; no forward outcomes
+        run: python feature_coverage_audit_local.py
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: open-core-feature-coverage-local-sec
+          name: open-core-canonical-pre-outcome-gate
           path: feature_coverage_audit_local/
           if-no-files-found: warn
