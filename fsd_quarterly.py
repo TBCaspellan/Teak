@@ -4,14 +4,27 @@ import numpy as np
 import pandas as pd
 
 CONCEPTS = {
-    'revenue_q': ('pnl','USD', ['RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet','Revenues','SalesRevenueGoodsNet','SalesRevenueServicesNet','RegulatedAndUnregulatedOperatingRevenue']),
+    # Revenue taxonomy coverage. Priority order prefers the modern contract-revenue
+    # concept, then common legacy/industry variants. All remain filing-time facts.
+    'revenue_q': ('pnl','USD', [
+        'RevenueFromContractWithCustomerExcludingAssessedTax',
+        'RevenueFromContractWithCustomerIncludingAssessedTax',
+        'SalesRevenueNet','Revenues','SalesRevenueGoodsNet','SalesRevenueServicesNet',
+        'RegulatedAndUnregulatedOperatingRevenue','OperatingRevenues'
+    ]),
     'gross_profit_q': ('pnl','USD', ['GrossProfit']),
-    'cogs_q': ('pnl','USD', ['CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsSold','CostOfServices','CostOfServiceRevenue']),
+    'cogs_q': ('pnl','USD', [
+        'CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsSold','CostOfServices',
+        'CostOfServiceRevenue','CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization'
+    ]),
     'op_income_q': ('pnl','USD',['OperatingIncomeLoss']),
     'net_income_q': ('pnl','USD',['NetIncomeLoss','ProfitLoss']),
     'interest_q': ('pnl','USD',['InterestExpenseNonOperating','InterestExpenseDebt','InterestAndDebtExpense','InterestExpense']),
     'cfo_q': ('ytd','USD',['NetCashProvidedByUsedInOperatingActivities','NetCashProvidedByUsedInOperatingActivitiesContinuingOperations']),
-    'capex_q': ('ytd','USD',['PaymentsToAcquirePropertyPlantAndEquipment','PaymentsToAcquireProductiveAssets']),
+    'capex_q': ('ytd','USD',[
+        'PaymentsToAcquirePropertyPlantAndEquipment','PaymentsToAcquireProductiveAssets',
+        'PaymentsForAdditionsToPropertyPlantAndEquipment'
+    ]),
     'assets_q': ('instant','USD',['Assets']),
     'cash_q': ('instant','USD',['CashAndCashEquivalentsAtCarryingValue','CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents']),
     'curr_assets_q': ('instant','USD',['AssetsCurrent']),
@@ -22,7 +35,7 @@ CONCEPTS = {
     'lt_debt_noncurrent_q': ('instant','USD',['LongTermDebtNoncurrent','LongTermDebtAndFinanceLeaseObligationsNoncurrent']),
     'lt_debt_total_q': ('instant','USD',['LongTermDebt']),
     'shares_q': ('instant','shares',['EntityCommonStockSharesOutstanding','CommonStockSharesOutstanding','SharesOutstanding']),
-    'shares_basic_anchor': ('average','shares',['WeightedAverageNumberOfSharesOutstandingBasic']),
+    'shares_basic_anchor': ('average','shares',['WeightedAverageNumberOfSharesOutstandingBasic','WeightedAverageNumberOfShareOutstandingBasicAndDiluted']),
 }
 TAG_LOOKUP={tag:(concept,kind,uom,p) for concept,(kind,uom,tags) in CONCEPTS.items() for p,tag in enumerate(tags)}
 FP_ORDER={'Q1':1,'Q2':2,'Q3':3,'Q4':4,'FY':4}
@@ -70,17 +83,24 @@ def _sequence_ok(prev_row,row):
 
 def _normalize_share_scale(q):
     q=q.copy();q['shares_scale_factor']=np.nan
-    if 'shares_q' not in q:return q
+    if 'shares_q' not in q:q['shares_q']=np.nan
+    q['shares_source_kind']=np.where(q['shares_q'].notna(),'INSTANT_OUTSTANDING',None)
     for i,r in q.iterrows():
         sh=r.get('shares_q',np.nan);anchor=r.get('shares_basic_anchor',np.nan)
-        if pd.isna(sh) or sh<=0:continue
-        factor=1.0
-        if pd.notna(anchor) and anchor>0:
-            candidates=[1e-6,1e-3,1.0,1e3,1e6]
-            factor=min(candidates,key=lambda f:abs(math.log10((sh*f)/anchor)))
-            ratio=(sh*factor)/anchor
-            if not (0.20<=ratio<=5.0):factor=1.0
-        q.at[i,'shares_q']=float(sh)*factor;q.at[i,'shares_scale_factor']=factor
+        if pd.notna(sh) and sh>0:
+            factor=1.0
+            if pd.notna(anchor) and anchor>0:
+                candidates=[1e-6,1e-3,1.0,1e3,1e6]
+                factor=min(candidates,key=lambda f:abs(math.log10((sh*f)/anchor)))
+                ratio=(sh*factor)/anchor
+                if not (0.20<=ratio<=5.0):factor=1.0
+            q.at[i,'shares_q']=float(sh)*factor;q.at[i,'shares_scale_factor']=factor
+        elif pd.notna(anchor) and anchor>0:
+            # Information-safe fallback: the basic weighted-average share count was
+            # public in the filing at the signal date. It is less exact than an
+            # instant outstanding count, so lineage is explicit for diagnostics.
+            q.at[i,'shares_q']=float(anchor);q.at[i,'shares_scale_factor']=1.0
+            q.at[i,'shares_source_kind']='BASIC_WEIGHTED_AVG_FALLBACK'
     return q
 
 def quarterly_history_asof(facts,signal_date):
