@@ -1,0 +1,36 @@
+name: OPEN real-data network smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'sec_client.py'
+      - 'price_providers.py'
+      - 'internet_smoke.py'
+      - 'requirements.txt'
+      - '.github/workflows/network-smoke.yml'
+
+jobs:
+  network-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SEC_USER_AGENT: 'OutlierFormulaResearch ${{ github.server_url }}/${{ github.repository }}'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Fetch real SEC and market data
+        run: python internet_smoke.py
+      - name: Upload smoke report and SEC cache
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-network-smoke
+          path: network_smoke/
+          if-no-files-found: warn
