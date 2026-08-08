@@ -6,6 +6,7 @@ on:
     branches: [master]
     paths:
       - 'sec_client.py'
+      - 'sec_mirror.py'
       - 'price_providers.py'
       - 'internet_smoke.py'
       - 'requirements.txt'
