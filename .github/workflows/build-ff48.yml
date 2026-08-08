@@ -1,0 +1,26 @@
+name: Freeze official FF48 SIC map
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-ff48.yml'
+      - 'build_ff48_map.py'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow requests
+      - run: python build_ff48_map.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ff48-sic-map
+          path: |
+            ff48_sic_map.parquet
+            ff48_sic_map.csv
+            ff48_report.json
