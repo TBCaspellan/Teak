@@ -1,0 +1,66 @@
+name: Step 6 blind predictive validation
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/step6-blind-predictive-validation.yml'
+      - 'step6_blind_predictive_validation.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  blind-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STEP4_ARTIFACT_ID: '9017787191'
+      STEP4_ARTIFACT_SHA256: 'd7546ba1c8d021f97ae3aa49b63e6fedb13328f180b4d12e30ba0feeef754f6f'
+      STEP5_ARTIFACT_ID: '9017859016'
+      STEP5_ARTIFACT_SHA256: '4a8f98f91ae559e50dfc6292df1bd227c1c0e4dd78c97a85fcccd4b8ff9e39e9'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install numpy pandas pyarrow
+      - name: Download frozen successful Step 4 artifact
+        run: |
+          mkdir -p step4_frozen
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP4_ARTIFACT_ID}/zip > step4.zip
+          echo "${STEP4_ARTIFACT_SHA256}  step4.zip" | sha256sum -c -
+          unzip -q step4.zip -d step4_frozen
+          test -f step4_frozen/scored_features.parquet
+          test -f step4_frozen/feature_coverage_report.json
+      - name: Download frozen successful Step 5 artifact
+        run: |
+          mkdir -p step5_frozen
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP5_ARTIFACT_ID}/zip > step5.zip
+          echo "${STEP5_ARTIFACT_SHA256}  step5.zip" | sha256sum -c -
+          unzip -q step5.zip -d step5_frozen
+          test -f step5_frozen/forward_outcomes.parquet
+          test -f step5_frozen/step5_outcome_validation_report.json
+      - name: Verify frozen sequencing before score-outcome association
+        run: |
+          python - <<'PY'
+          import json
+          s4=json.load(open('step4_frozen/feature_coverage_report.json'))
+          s5=json.load(open('step5_frozen/step5_outcome_validation_report.json'))
+          assert s4.get('status')=='PASS'
+          assert s4.get('NO_FORWARD_OUTCOMES_ACCESSED') is True
+          assert s5.get('status')=='PASS'
+          assert s5.get('SCORE_OUTCOME_ASSOCIATION_COMPUTED') is False
+          assert s5.get('WEIGHT_OPTIMIZATION_PERFORMED') is False
+          assert s5.get('THRESHOLD_OPTIMIZATION_PERFORMED') is False
+          assert s5.get('WINNER_SELECTION_PERFORMED') is False
+          assert s5.get('LOSER_SELECTION_PERFORMED') is False
+          assert s5.get('FORWARD_OUTCOMES_ACCESSED_ONLY_AFTER_FROZEN_STEP4_ARTIFACT') is True
+          print('Frozen Step 4 and Step 5 sequencing verified; Step 6 may now compute predeclared associations.')
+          PY
+      - name: Run blind predictive diagnostics with no optimization or selection
+        run: python step6_blind_predictive_validation.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step6-blind-predictive-validation
+          path: step6_blind_predictive_validation/
+          if-no-files-found: warn
