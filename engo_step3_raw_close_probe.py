@@ -37,7 +37,33 @@ def engo_bars(session,ticker):
 
 
 def engo_actions(session,ticker):
-    return get_json(session,f'{BASE}/api/v1/lake/actions/{ticker}')
+    """
+    Corporate actions are normalization metadata, not a required survivorship gate.
+    Engo's actions coverage is smaller than its historical price book, so a delisted
+    security can have valid EOD history while /actions/{ticker} returns 404.
+
+    Treat that case as an explicit empty action set. Any hidden split will still be
+    exposed by the downstream raw-close OHLC containment invariant rather than being
+    silently accepted.
+    """
+    url=f'{BASE}/api/v1/lake/actions/{ticker}'
+    last=None
+    for k in range(4):
+        try:
+            r=session.get(url,timeout=90)
+            if r.status_code==404:
+                return {'symbol':ticker,'splits':[],'dividends':[],
+                        'actions_available':False,'actions_http_status':404,
+                        'coverage_note':'Engo actions endpoint returned 404; treated as no available action record.'}
+            r.raise_for_status()
+            obj=r.json()
+            if isinstance(obj,dict):
+                obj.setdefault('actions_available',True)
+                obj.setdefault('actions_http_status',r.status_code)
+            return obj
+        except Exception as e:
+            last=e; time.sleep(1.0+k)
+    raise last
 
 
 def split_factor_after(d, terminal, splits):
@@ -140,6 +166,8 @@ def main():
             cases[ticker]={'status':'FAIL','error':'NO_ENGO_BARS'}; all_pass=False; continue
         r=reconstruct(bars,acts)
         # Raw-close invariant: reconstructed as-traded close should sit inside raw daily OHLC.
+        # This remains the hard detector for a missing/incorrect action history, including
+        # the explicit 404/no-actions case for delisted names.
         v=r[['low','high','raw_close_reconstructed']].dropna(); v=v[v.high>=v.low]
         inside=((v.raw_close_reconstructed>=v.low*.998)&(v.raw_close_reconstructed<=v.high*1.002)) if len(v) else pd.Series(dtype=bool)
         ohlc_rate=float(inside.mean()) if len(inside) else np.nan
@@ -147,6 +175,8 @@ def main():
 
         case={'rows':len(r),'first_date':str(r.date.min().date()),'last_date':str(r.date.max().date()),
               'n_splits':len((acts or {}).get('splits',[])),'n_dividends':len((acts or {}).get('dividends',[])),
+              'actions_available':bool((acts or {}).get('actions_available',True)),
+              'actions_http_status':(acts or {}).get('actions_http_status'),
               'raw_close_ohlc_containment_rate':ohlc_rate,'terminal_anchor_relerr':terminal_rel,
               'engo_close_basis':meta.get('close_basis') if isinstance(meta,dict) else None}
 
@@ -170,6 +200,10 @@ def main():
         if ticker in ACTIVE_REF:
             ok_ref=bool(case.get('yahoo_overlap_rows',0)>=100 and case['split_close_vs_yahoo_median_relerr']<=.001 and case['split_close_vs_yahoo_p99_relerr']<=.01)
         case['status']='PASS' if ok_ohlc and ok_ref else 'FAIL'
+        if not case['actions_available'] and case['status']=='PASS':
+            case['note']='No Engo action record was available, but the OHLC reconstruction invariant passed without corporate-action adjustments.'
+        elif not case['actions_available']:
+            case['note']='No Engo action record was available and the OHLC invariant failed; do not treat the reconstructed raw series as production-safe.'
         all_pass=all_pass and case['status']=='PASS'
         cases[ticker]=case
 
@@ -178,6 +212,7 @@ def main():
             'formula':{'split_only_backward':'S[t-1]=(S[t]+Dividend[t]/P[t])/(A[t]/A[t-1])',
                        'raw_close':'C[t]=S[t]*P[t]','raw_volume':'V_raw[t]=V_engo[t]/P[t]',
                        'P':'product of split ratios strictly after t through terminal bar'},
+            'actions_404_policy':'A missing Engo actions record is nonfatal. It becomes an explicit empty action set and must still pass the >=99.5% reconstructed raw-close OHLC containment gate.',
             'pit_policy':'Current corporate-action records are normalization metadata only; reconstructed raw prices/volumes are model inputs. Corporate-action events themselves are not predictive features.',
             'yahoo_policy':'Yahoo is validation-only for active securities; it is never a production historical-universe source.',
             'cases':cases,
