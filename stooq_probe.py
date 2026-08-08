@@ -1,7 +1,7 @@
 from __future__ import annotations
 import io, json, requests, zipfile
 
-URL='https://stooq.com/db/h/d_us_txt.zip'
+URL='https://static.stooq.com/db/h/d_us_txt.zip'
 
 def main():
     r=requests.get(URL,timeout=120)
@@ -12,7 +12,6 @@ def main():
     for sym in ['rnow','leh','crm','aapl','shld','shldq','yhoo']:
         hits=[n for n in names if n.endswith('/'+sym+'.us.txt') or n.endswith('/'+sym+'.txt') or n.endswith(sym+'.us.txt')]
         probes[sym]=hits[:10]
-    # folder-level exchange structure sample
     samples=[n for n in names if n.endswith('.txt')][:20]
     out={'status':'PASS','zip_bytes':len(r.content),'file_count':len(names),'probes':probes,'samples':samples}
     print(json.dumps(out,indent=2))
