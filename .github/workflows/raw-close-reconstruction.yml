@@ -1,0 +1,29 @@
+name: Validate Engo raw close reconstruction
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/raw-close-reconstruction.yml'
+      - 'raw_close_reconstruction_probe.py'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas numpy requests
+      - run: python raw_close_reconstruction_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-close-reconstruction
+          path: |
+            raw_close_reconstruction_report.json
+            raw_close_*_tail.csv
+          if-no-files-found: warn
