@@ -1,7 +1,7 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from pathlib import Path
-import hashlib,json
+import hashlib,json,os
 import numpy as np
 import pandas as pd
 
@@ -11,6 +11,7 @@ from engo_provider import EngoPriceProvider
 from open_core_runtime import fundamental_raw,market_raw,finalize_raw
 
 SIGNAL=pd.Timestamp('2020-06-30');HISTORY_START=SIGNAL-pd.Timedelta(days=520);MAX_PER_FF48=8
+ENGO_WORKERS=int(os.environ.get('ENGO_WORKERS','3'))
 REQUIRED_Q_COLS=['revenue_q','cogs_q','op_income_q','net_income_q','cfo_q','capex_q','assets_q','cash_q','curr_assets_q','curr_liab_q','curr_debt_q','lt_debt_q','interest_q','shares_q']
 DIAG_Q_COLS=REQUIRED_Q_COLS+['gross_profit_q']
 RAW_DIAG_COLS=[
@@ -54,6 +55,7 @@ def q_coverage(qmap,sample):
             rec[c+'_last8_complete']=bool(len(q)>=8 and c in q and q[c].tail(8).notna().all())
             rec[c+'_last10_complete']=bool(len(q)>=10 and c in q and q[c].tail(10).notna().all())
         rec['cogs_derived_rows']=int(q.get('cogs_derived_from_gross_profit',pd.Series(dtype=bool)).fillna(False).sum()) if len(q) else 0
+        rec['shares_basic_fallback_rows']=int(q.get('shares_source_kind',pd.Series(dtype=object)).eq('BASIC_WEIGHTED_AVG_FALLBACK').sum()) if len(q) else 0
         rows.append(rec)
     return pd.DataFrame(rows)
 
@@ -82,7 +84,7 @@ def main():
     qdiag=q_coverage(qmap,sample);qdiag.to_csv(outdir/'quarterly_field_coverage.csv',index=False)
 
     ep=CachedEngo();spy=ep.raw_history('SPY',HISTORY_START,SIGNAL);prices={};actions={};price_errors={};price_semantics={}
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=ENGO_WORKERS) as ex:
         fut={ex.submit(load_price,t):t for t in sample.ticker.astype(str).unique()}
         for f in as_completed(fut):
             t,h,a,e,sem=f.result();prices[t]=h;actions[t]=a;price_semantics[t]=sem
@@ -110,7 +112,7 @@ def main():
     industries_with_2plus=int((peer_counts>=2).sum());industries_with_3plus=int((peer_counts>=3).sum())
     scorable_rows=int(elig.get('scorable',pd.Series(False,index=elig.index)).fillna(False).sum()) if len(elig) else 0
     scorable_rate_eligible=float(scorable_rows/len(elig)) if len(elig) else 0.0
-    report={'status':'PASS' if len(scored) and scored.get('OFS_A_OPEN',pd.Series(dtype=float)).notna().any() else 'FAIL','transport':'LOCAL_SEC_DUCKDB','qa_sample_max_per_ff48':MAX_PER_FF48,'signal_date':str(SIGNAL.date()),'identity_eligible_population':len(u),'stratified_sample_rows':len(sample),'ff48_industries_sampled':int(sample.industry_code.nunique()),'raw_rows':len(raw),'eligible_adv60_rows':len(elig),'eligible_industries':int(peer_counts.size),'eligible_industries_with_2plus_peers':industries_with_2plus,'eligible_industries_with_3plus_peers':industries_with_3plus,'eligible_peer_count_by_industry':{str(int(k)):int(v) for k,v in peer_counts.items()},'price_errors':len(price_errors),'price_error_types':err_types,'price_semantics_counts':sem_counts,'feature_exceptions':len(exceptions),'aq_mature_rows':int(scored.get('AQ_raw',pd.Series(dtype=float)).notna().sum()),'share_history_suspect_rows':int(scored.get('share_history_suspect',pd.Series(dtype=bool)).fillna(False).sum()),'component_nonmissing_rates_all_rows':{c:float(scored[c].notna().mean()) if c in scored else 0.0 for c in comps},'component_nonmissing_rates_eligible':{c:float(elig[c].notna().mean()) if len(elig) and c in elig else 0.0 for c in comps},'raw_subfactor_nonmissing_rates_all_rows':raw_rates,'raw_subfactor_nonmissing_rates_eligible':eligible_raw_rates,'quarterly_last8_complete_rates':q_last8,'quarterly_last10_complete_rates':q_last10,'cogs_derived_from_gross_profit_total_rows':int(qdiag.cogs_derived_rows.sum()),'scorable_rows_eligible':scorable_rows,'scorable_rate_eligible':scorable_rate_eligible,'feature_error_examples':list(dict.fromkeys(raw.get('feature_error',pd.Series(dtype=object)).dropna().astype(str)))[:20],'NO_FORWARD_OUTCOMES_ACCESSED':True}
+    report={'status':'PASS' if len(scored) and scored.get('OFS_A_OPEN',pd.Series(dtype=float)).notna().any() else 'FAIL','transport':'LOCAL_SEC_DUCKDB','qa_sample_max_per_ff48':MAX_PER_FF48,'engo_workers':ENGO_WORKERS,'signal_date':str(SIGNAL.date()),'identity_eligible_population':len(u),'stratified_sample_rows':len(sample),'ff48_industries_sampled':int(sample.industry_code.nunique()),'raw_rows':len(raw),'eligible_adv60_rows':len(elig),'eligible_industries':int(peer_counts.size),'eligible_industries_with_2plus_peers':industries_with_2plus,'eligible_industries_with_3plus_peers':industries_with_3plus,'eligible_peer_count_by_industry':{str(int(k)):int(v) for k,v in peer_counts.items()},'price_errors':len(price_errors),'price_error_types':err_types,'price_semantics_counts':sem_counts,'feature_exceptions':len(exceptions),'aq_mature_rows':int(scored.get('AQ_raw',pd.Series(dtype=float)).notna().sum()),'share_history_suspect_rows':int(scored.get('share_history_suspect',pd.Series(dtype=bool)).fillna(False).sum()),'shares_basic_fallback_total_rows':int(qdiag.get('shares_basic_fallback_rows',pd.Series(dtype=int)).sum()),'component_nonmissing_rates_all_rows':{c:float(scored[c].notna().mean()) if c in scored else 0.0 for c in comps},'component_nonmissing_rates_eligible':{c:float(elig[c].notna().mean()) if len(elig) and c in elig else 0.0 for c in comps},'raw_subfactor_nonmissing_rates_all_rows':raw_rates,'raw_subfactor_nonmissing_rates_eligible':eligible_raw_rates,'quarterly_last8_complete_rates':q_last8,'quarterly_last10_complete_rates':q_last10,'cogs_derived_from_gross_profit_total_rows':int(qdiag.cogs_derived_rows.sum()),'scorable_rows_eligible':scorable_rows,'scorable_rate_eligible':scorable_rate_eligible,'feature_error_examples':list(dict.fromkeys(raw.get('feature_error',pd.Series(dtype=object)).dropna().astype(str)))[:20],'NO_FORWARD_OUTCOMES_ACCESSED':True}
     (outdir/'feature_coverage_report.json').write_text(json.dumps(report,indent=2,default=str),encoding='utf-8');print(json.dumps(report,indent=2,default=str))
     if report['status']!='PASS':raise SystemExit(1)
 if __name__=='__main__':main()
