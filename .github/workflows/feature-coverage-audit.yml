@@ -38,7 +38,7 @@ jobs:
           gh api /repos/${{ github.repository }}/actions/artifacts/9014929943/zip > ff48.zip
           unzip -q ff48.zip -d ff48
           test -f ff48/ff48_sic_map.parquet
-      - name: Build features only on current head; no forward outcomes
+      - name: Build features only on latest audited head; no forward outcomes
         run: python feature_coverage_audit.py
       - if: always()
         uses: actions/upload-artifact@v4
