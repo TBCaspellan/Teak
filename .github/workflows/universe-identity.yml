@@ -1,0 +1,42 @@
+name: OPEN historical universe identity audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/universe-identity.yml'
+      - 'build_universe_identity.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  identity-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pandas pyarrow requests duckdb
+      - name: Require Engo key
+        run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - name: Download frozen historical Form 4 CIK-ticker evidence
+        run: |
+          mkdir -p form4
+          gh api /repos/${{ github.repository }}/actions/artifacts/9014337819/zip > form4.zip
+          unzip -q form4.zip -d form4
+          test -f form4/historical_ticker_evidence_form4.parquet
+      - name: Build quarter-by-quarter identity universe
+        run: python build_universe_identity.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-universe-identity-audit
+          path: universe_identity/
+          if-no-files-found: warn
