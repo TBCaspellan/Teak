@@ -30,9 +30,11 @@ jobs:
           unzip -q form4.zip -d form4
           test -f form4/historical_ticker_evidence_form4.parquet
       - run: python build_form345_ticker_evidence.py
-      - uses: actions/upload-artifact@v4
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: historical-form345-ticker-evidence
           path: |
             historical_ticker_evidence_form345.parquet
             form345_ticker_evidence_report.json
+          if-no-files-found: warn
