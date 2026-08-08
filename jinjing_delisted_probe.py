@@ -1,18 +1,26 @@
 from __future__ import annotations
+from pathlib import Path
 import json
 import duckdb
+from huggingface_hub import HfApi, hf_hub_download
 
-URL='https://huggingface.co/datasets/cedwyh/jinjing-shared-data/resolve/main/delisted_unified.parquet'
+REPO='cedwyh/jinjing-shared-data'
+TARGET='delisted_unified.parquet'
 SYMBOLS=['RNOW','LEH','SHLD','SHLDQ','YHOO','AABA','BBI','EK','EKDKQ','TWTR','SIVB','FRC','SVB','ATVI']
 
 
 def main():
+    api=HfApi()
+    files=api.list_repo_files(REPO,repo_type='dataset')
+    hits=[f for f in files if f.endswith('/'+TARGET) or f==TARGET]
+    if len(hits)!=1:
+        raise RuntimeError(f'Expected one {TARGET}; found {hits}')
+    repo_path=hits[0]
+    local=hf_hub_download(repo_id=REPO,repo_type='dataset',filename=repo_path,local_dir='cache/jinjing')
+
     con=duckdb.connect()
-    con.execute('INSTALL httpfs')
-    con.execute('LOAD httpfs')
-    con.execute('SET http_timeout=120')
-    con.execute('SET http_retries=5')
     syms=','.join("'"+s+"'" for s in SYMBOLS)
+    safe=str(local).replace("'","''")
     stats=con.execute(f"""
       SELECT count(*) AS row_count,
              count(distinct upper(symbol)) AS symbol_count,
@@ -20,7 +28,7 @@ def main():
              max(cast(date as date)) AS last_date,
              count(*) FILTER (WHERE volume IS NULL) AS null_volume_rows,
              count(*) FILTER (WHERE close IS NULL) AS null_close_rows
-      FROM read_parquet('{URL}')
+      FROM read_parquet('{safe}')
     """).df().iloc[0].to_dict()
     probes=con.execute(f"""
       SELECT upper(symbol) AS symbol,
@@ -31,7 +39,7 @@ def main():
              min(close) AS min_close,
              max(close) AS max_close,
              max(volume) AS max_volume
-      FROM read_parquet('{URL}')
+      FROM read_parquet('{safe}')
       WHERE upper(symbol) IN ({syms})
       GROUP BY 1
       ORDER BY 1
@@ -39,20 +47,19 @@ def main():
     found=set(probes['symbol'].tolist()) if len(probes) else set()
     sample=con.execute(f"""
       SELECT symbol, market, min(cast(date as date)) first_date, max(cast(date as date)) last_date, count(*) n
-      FROM read_parquet('{URL}')
+      FROM read_parquet('{safe}')
       GROUP BY symbol, market
       ORDER BY last_date DESC
       LIMIT 30
     """).df()
     out={
-      'status':'PASS',
-      'url':URL,
+      'status':'PASS','repo':REPO,'repo_path':repo_path,'local_bytes':Path(local).stat().st_size,
       'stats':{k:str(v) for k,v in stats.items()},
       'probes':probes.astype(str).to_dict(orient='records'),
       'missing':[s for s in SYMBOLS if s not in found],
       'sample':sample.astype(str).to_dict(orient='records'),
     }
-    open('jinjing_delisted_probe_report.json','w').write(json.dumps(out,indent=2))
+    Path('jinjing_delisted_probe_report.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
     print(json.dumps(out,indent=2))
 
 if __name__=='__main__':
