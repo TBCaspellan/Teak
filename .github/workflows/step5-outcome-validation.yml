@@ -1,0 +1,50 @@
+name: Step 5 leakage-safe forward outcome validation
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/step5-outcome-validation.yml'
+      - 'step5_outcome_validation.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  validate-outcomes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      STEP4_ARTIFACT_ID: '9017787191'
+      STEP4_ARTIFACT_SHA256: 'd7546ba1c8d021f97ae3aa49b63e6fedb13328f180b4d12e30ba0feeef754f6f'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install numpy pandas pyarrow requests
+      - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - name: Download frozen successful Step 4 artifact
+        run: |
+          mkdir -p step4_frozen
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP4_ARTIFACT_ID}/zip > step4.zip
+          echo "${STEP4_ARTIFACT_SHA256}  step4.zip" | sha256sum -c -
+          unzip -q step4.zip -d step4_frozen
+          test -f step4_frozen/scored_features.parquet
+          test -f step4_frozen/feature_coverage_report.json
+      - name: Validate Step 4 firewall before opening outcomes
+        run: |
+          python - <<'PY'
+          import json
+          r=json.load(open('step4_frozen/feature_coverage_report.json'))
+          assert r.get('status')=='PASS', r.get('status')
+          assert r.get('NO_FORWARD_OUTCOMES_ACCESSED') is True
+          print('Frozen Step 4 PASS; forward-outcome firewall verified before Step 5.')
+          PY
+      - name: Construct and validate forward outcomes without score access or optimization
+        run: python step5_outcome_validation.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step5-leakage-safe-forward-outcomes
+          path: step5_outcome_validation/
+          if-no-files-found: warn
