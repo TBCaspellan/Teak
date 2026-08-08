@@ -5,6 +5,7 @@ import pandas as pd
 
 CONCEPTS = {
     'revenue_q': ('pnl','USD', ['RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet','Revenues','SalesRevenueServicesNet']),
+    'gross_profit_q': ('pnl','USD', ['GrossProfit']),
     'cogs_q': ('pnl','USD', ['CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsSold','CostOfServices','CostOfServiceRevenue']),
     'op_income_q': ('pnl','USD',['OperatingIncomeLoss']),
     'net_income_q': ('pnl','USD',['NetIncomeLoss','ProfitLoss']),
@@ -74,12 +75,6 @@ def _sequence_ok(prev_row,row):
 
 
 def _normalize_share_scale(q):
-    """
-    SEC FSD can preserve legacy filing presentation scales in old share facts even
-    when UOM is `shares` (live AAPL 2014 audit: 861,745 vs ~875m weighted-average).
-    Use same-period basic weighted-average shares only to infer a power-of-1000
-    presentation scale. The average share count is never substituted as shares_q.
-    """
     q=q.copy();q['shares_scale_factor']=np.nan
     if 'shares_q' not in q:return q
     for i,r in q.iterrows():
@@ -101,7 +96,6 @@ def quarterly_history_asof(facts,signal_date):
     cf=canonical_filing_facts(x)
     if cf.empty:return pd.DataFrame()
     cf['fp']=cf.fp.astype(str).str.upper().str.strip();cf=cf[cf.fp.isin(FP_ORDER)].copy()
-    # Period date, not SEC FY label, is the stable period identity. Resolve latest accepted per concept.
     cf=cf.sort_values(['period','concept','accepted','adsh']).drop_duplicates(['period','concept'],keep='last')
     rows=[]
     for period,g in cf.groupby('period',sort=True):
@@ -130,6 +124,17 @@ def quarterly_history_asof(facts,signal_date):
                     vals=stand[i-3:i];stand.append(float(val-sum(vals)) if all(pd.notna(v) for v in vals) else np.nan);continue
             stand.append(np.nan)
         q[concept]=stand
+
+    # Some issuers report GrossProfit but not a separate cost-of-revenue concept.
+    # This is an accounting identity, not an imputation: COGS = Revenue - GrossProfit.
+    if 'gross_profit_q' in q:
+        if 'cogs_q' not in q:q['cogs_q']=np.nan
+        mask=q['cogs_q'].isna() & q['revenue_q'].notna() & q['gross_profit_q'].notna()
+        q.loc[mask,'cogs_q']=q.loc[mask,'revenue_q']-q.loc[mask,'gross_profit_q']
+        q['cogs_derived_from_gross_profit']=mask
+    else:
+        q['cogs_derived_from_gross_profit']=False
+
     debts=q.apply(_derive_debt,axis=1);q['curr_debt_q']=[d[0] for d in debts];q['lt_debt_q']=[d[1] for d in debts]
     q['datadate']=q.period;q['public_date']=q.accepted;q['gvkey']=q.cik.astype(str).str.zfill(10)
     return q.sort_values('datadate').reset_index(drop=True)
