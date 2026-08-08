@@ -10,7 +10,7 @@ from fsd_quarterly import quarterly_history_asof,TAG_LOOKUP
 from engo_provider import EngoPriceProvider
 from open_core_runtime import fundamental_raw,market_raw,finalize_raw
 
-SIGNAL=pd.Timestamp('2020-06-30');HISTORY_START=SIGNAL-pd.Timedelta(days=520);MAX_PER_FF48=3
+SIGNAL=pd.Timestamp('2020-06-30');HISTORY_START=SIGNAL-pd.Timedelta(days=520);MAX_PER_FF48=8
 REQUIRED_Q_COLS=['revenue_q','cogs_q','op_income_q','net_income_q','cfo_q','capex_q','assets_q','cash_q','curr_assets_q','curr_liab_q','curr_debt_q','lt_debt_q','interest_q','shares_q']
 DIAG_Q_COLS=REQUIRED_Q_COLS+['gross_profit_q']
 RAW_DIAG_COLS=[
@@ -97,14 +97,20 @@ def main():
         rows.append(base)
     raw=pd.DataFrame(rows);raw.to_parquet(outdir/'raw_features.parquet',index=False);scored=finalize_raw(rows,spy);scored.to_parquet(outdir/'scored_features.parquet',index=False)
     comps=['F','Q','R_Q','M','D','FR','EB','LR','COS_OPEN','OFS_A_OPEN','OFS_B_OPEN']
+    elig=scored[scored.get('eligible',False).fillna(False)].copy() if len(scored) else scored.copy()
     raw_rates={c:float(raw[c].notna().mean()) if c in raw else 0.0 for c in RAW_DIAG_COLS}
+    eligible_raw_rates={c:float(elig[c].notna().mean()) if len(elig) and c in elig else 0.0 for c in RAW_DIAG_COLS}
     q_last8={c:float(qdiag[c+'_last8_complete'].mean()) for c in DIAG_Q_COLS}
     q_last10={c:float(qdiag[c+'_last10_complete'].mean()) for c in DIAG_Q_COLS}
     sem_counts=raw.get('price_semantics',pd.Series(dtype=object)).fillna('NONE').value_counts().to_dict()
     err_types={}
     for e in price_errors.values():
         k=e.split(':',1)[0];err_types[k]=err_types.get(k,0)+1
-    report={'status':'PASS' if len(scored) and scored.get('OFS_A_OPEN',pd.Series(dtype=float)).notna().any() else 'FAIL','transport':'LOCAL_SEC_DUCKDB','qa_sample_max_per_ff48':MAX_PER_FF48,'signal_date':str(SIGNAL.date()),'identity_eligible_population':len(u),'stratified_sample_rows':len(sample),'ff48_industries_sampled':int(sample.industry_code.nunique()),'raw_rows':len(raw),'eligible_adv60_rows':int(raw.get('eligible',False).sum()),'price_errors':len(price_errors),'price_error_types':err_types,'price_semantics_counts':sem_counts,'feature_exceptions':len(exceptions),'aq_mature_rows':int(scored.get('AQ_raw',pd.Series(dtype=float)).notna().sum()),'share_history_suspect_rows':int(scored.get('share_history_suspect',pd.Series(dtype=bool)).fillna(False).sum()),'component_nonmissing_rates':{c:float(scored[c].notna().mean()) if c in scored else 0.0 for c in comps},'raw_subfactor_nonmissing_rates':raw_rates,'quarterly_last8_complete_rates':q_last8,'quarterly_last10_complete_rates':q_last10,'cogs_derived_from_gross_profit_total_rows':int(qdiag.cogs_derived_rows.sum()),'scorable_rows':int(scored.get('scorable',pd.Series(dtype=bool)).fillna(False).sum()),'scorable_rate':float(scored.get('scorable',pd.Series(dtype=bool)).fillna(False).mean()) if len(scored) else 0.0,'feature_error_examples':list(dict.fromkeys(raw.get('feature_error',pd.Series(dtype=object)).dropna().astype(str)))[:20],'NO_FORWARD_OUTCOMES_ACCESSED':True}
+    peer_counts=(elig.groupby('industry_code').size().sort_index() if len(elig) else pd.Series(dtype=int))
+    industries_with_2plus=int((peer_counts>=2).sum());industries_with_3plus=int((peer_counts>=3).sum())
+    scorable_rows=int(elig.get('scorable',pd.Series(False,index=elig.index)).fillna(False).sum()) if len(elig) else 0
+    scorable_rate_eligible=float(scorable_rows/len(elig)) if len(elig) else 0.0
+    report={'status':'PASS' if len(scored) and scored.get('OFS_A_OPEN',pd.Series(dtype=float)).notna().any() else 'FAIL','transport':'LOCAL_SEC_DUCKDB','qa_sample_max_per_ff48':MAX_PER_FF48,'signal_date':str(SIGNAL.date()),'identity_eligible_population':len(u),'stratified_sample_rows':len(sample),'ff48_industries_sampled':int(sample.industry_code.nunique()),'raw_rows':len(raw),'eligible_adv60_rows':len(elig),'eligible_industries':int(peer_counts.size),'eligible_industries_with_2plus_peers':industries_with_2plus,'eligible_industries_with_3plus_peers':industries_with_3plus,'eligible_peer_count_by_industry':{str(int(k)):int(v) for k,v in peer_counts.items()},'price_errors':len(price_errors),'price_error_types':err_types,'price_semantics_counts':sem_counts,'feature_exceptions':len(exceptions),'aq_mature_rows':int(scored.get('AQ_raw',pd.Series(dtype=float)).notna().sum()),'share_history_suspect_rows':int(scored.get('share_history_suspect',pd.Series(dtype=bool)).fillna(False).sum()),'component_nonmissing_rates_all_rows':{c:float(scored[c].notna().mean()) if c in scored else 0.0 for c in comps},'component_nonmissing_rates_eligible':{c:float(elig[c].notna().mean()) if len(elig) and c in elig else 0.0 for c in comps},'raw_subfactor_nonmissing_rates_all_rows':raw_rates,'raw_subfactor_nonmissing_rates_eligible':eligible_raw_rates,'quarterly_last8_complete_rates':q_last8,'quarterly_last10_complete_rates':q_last10,'cogs_derived_from_gross_profit_total_rows':int(qdiag.cogs_derived_rows.sum()),'scorable_rows_eligible':scorable_rows,'scorable_rate_eligible':scorable_rate_eligible,'feature_error_examples':list(dict.fromkeys(raw.get('feature_error',pd.Series(dtype=object)).dropna().astype(str)))[:20],'NO_FORWARD_OUTCOMES_ACCESSED':True}
     (outdir/'feature_coverage_report.json').write_text(json.dumps(report,indent=2,default=str),encoding='utf-8');print(json.dumps(report,indent=2,default=str))
     if report['status']!='PASS':raise SystemExit(1)
 if __name__=='__main__':main()
