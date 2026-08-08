@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import numpy as np
 import pandas as pd
 
@@ -20,6 +21,8 @@ CONCEPTS = {
     'lt_debt_noncurrent_q': ('instant','USD',['LongTermDebtNoncurrent','LongTermDebtAndFinanceLeaseObligationsNoncurrent']),
     'lt_debt_total_q': ('instant','USD',['LongTermDebt']),
     'shares_q': ('instant','shares',['EntityCommonStockSharesOutstanding','CommonStockSharesOutstanding','SharesOutstanding']),
+    # Scale anchor only. It is never substituted for point-in-time shares.
+    'shares_basic_anchor': ('average','shares',['WeightedAverageNumberOfSharesOutstandingBasic']),
 }
 TAG_LOOKUP={tag:(concept,kind,uom,p) for concept,(kind,uom,tags) in CONCEPTS.items() for p,tag in enumerate(tags)}
 FP_ORDER={'Q1':1,'Q2':2,'Q3':3,'Q4':4,'FY':4}
@@ -43,10 +46,10 @@ def canonical_filing_facts(facts):
     def qrank(r):
         q=int(r.qnum);a=int(r.qtrs)
         if r.kind=='instant':return 0 if a==0 else 99
-        if r.kind=='pnl':
+        if r.kind in ('pnl','average'):
             desired=4 if q==4 else 1
             if a==desired:return 0
-            if q in (2,3) and a==q:return 1
+            if r.kind=='pnl' and q in (2,3) and a==q:return 1
             return 99
         if a==q:return 0
         if q in (2,3) and a==1:return 1
@@ -66,26 +69,39 @@ def _derive_debt(row):
 
 def _sequence_ok(prev_row,row):
     if prev_row is None:return False
-    expected=(int(prev_row['fqtr'])%4)+1
-    days=(pd.Timestamp(row['period'])-pd.Timestamp(prev_row['period'])).days
+    expected=(int(prev_row['fqtr'])%4)+1;days=(pd.Timestamp(row['period'])-pd.Timestamp(prev_row['period'])).days
     return int(row['fqtr'])==expected and 60<=days<=125
 
 
-def quarterly_history_asof(facts,signal_date):
+def _normalize_share_scale(q):
     """
-    Point-in-time quarterly reconstruction.
+    SEC FSD can preserve legacy filing presentation scales in old share facts even
+    when UOM is `shares` (live AAPL 2014 audit: 861,745 vs ~875m weighted-average).
+    Use same-period basic weighted-average shares only to infer a power-of-1000
+    presentation scale. The average share count is never substituted as shares_q.
+    """
+    q=q.copy();q['shares_scale_factor']=np.nan
+    if 'shares_q' not in q:return q
+    for i,r in q.iterrows():
+        sh=r.get('shares_q',np.nan);anchor=r.get('shares_basic_anchor',np.nan)
+        if pd.isna(sh) or sh<=0:continue
+        factor=1.0
+        if pd.notna(anchor) and anchor>0:
+            candidates=[1e-6,1e-3,1.0,1e3,1e6]
+            factor=min(candidates,key=lambda f:abs(math.log10((sh*f)/anchor)))
+            ratio=(sh*factor)/anchor
+            if not (0.20<=ratio<=5.0):factor=1.0
+        q.at[i,'shares_q']=float(sh)*factor;q.at[i,'shares_scale_factor']=factor
+    return q
 
-    SEC FSD's FY field is not a stable fiscal-period identifier across all issuers
-    (a Salesforce audit showed adjacent filings with colliding FY/FP labels).
-    Therefore restatement/version identity is `period + concept`, while `fp` supplies
-    quarter position. Amendments replace only concepts they actually republish.
-    """
+
+def quarterly_history_asof(facts,signal_date):
     if facts.empty:return pd.DataFrame()
     x=facts.copy();x['accepted']=pd.to_datetime(x.accepted,errors='coerce');x=x[x.accepted<=signal_close(signal_date)].copy()
     cf=canonical_filing_facts(x)
     if cf.empty:return pd.DataFrame()
     cf['fp']=cf.fp.astype(str).str.upper().str.strip();cf=cf[cf.fp.isin(FP_ORDER)].copy()
-    # Period date is the authoritative historical period identity; concept-level latest accepted version wins.
+    # Period date, not SEC FY label, is the stable period identity. Resolve latest accepted per concept.
     cf=cf.sort_values(['period','concept','accepted','adsh']).drop_duplicates(['period','concept'],keep='last')
     rows=[]
     for period,g in cf.groupby('period',sort=True):
@@ -94,7 +110,7 @@ def quarterly_history_asof(facts,signal_date):
         for r in g.itertuples():
             meta[r.concept]=r.value;meta[r.concept+'_reported_qtrs']=int(r.qtrs);meta[r.concept+'_tag']=r.tag;meta[r.concept+'_accepted']=r.accepted;meta[r.concept+'_adsh']=r.adsh
         rows.append(meta)
-    q=pd.DataFrame(rows).sort_values('period').reset_index(drop=True)
+    q=pd.DataFrame(rows).sort_values('period').reset_index(drop=True);q=_normalize_share_scale(q)
 
     for concept,(kind,_,_) in CONCEPTS.items():
         if kind not in ('pnl','ytd') or concept not in q:continue
@@ -107,13 +123,11 @@ def quarterly_history_asof(facts,signal_date):
             prev=q.iloc[i-1] if i>0 else None
             if prev is not None and _sequence_ok(prev,row):
                 pval=raw.iloc[i-1];pqt=rq.iloc[i-1]
-                if pd.notna(pval) and pd.notna(pqt) and int(pqt)==fq-1:
-                    stand.append(float(val-pval));continue
+                if pd.notna(pval) and pd.notna(pqt) and int(pqt)==fq-1:stand.append(float(val-pval));continue
             if fq==4 and i>=3:
                 prior=q.iloc[i-3:i]
                 if list(prior.fqtr.astype(int))==[1,2,3] and all(_sequence_ok(q.iloc[j-1] if j>0 else None,q.iloc[j]) for j in range(i-2,i+1)):
-                    vals=stand[i-3:i]
-                    stand.append(float(val-sum(vals)) if all(pd.notna(v) for v in vals) else np.nan);continue
+                    vals=stand[i-3:i];stand.append(float(val-sum(vals)) if all(pd.notna(v) for v in vals) else np.nan);continue
             stand.append(np.nan)
         q[concept]=stand
     debts=q.apply(_derive_debt,axis=1);q['curr_debt_q']=[d[0] for d in debts];q['lt_debt_q']=[d[1] for d in debts]
