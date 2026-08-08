@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SEC_USER_AGENT: 'OutlierFormulaResearch ${{ github.server_url }}/${{ github.repository }}'
+      SEC_USER_AGENT: 'TBCaspellan-Outlier-Research 62999539+TBCaspellan@users.noreply.github.com'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
