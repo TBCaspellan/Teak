@@ -2,6 +2,12 @@ name: Validate Engo survivorship-safe prices
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/engo-validate.yml'
+      - 'validate_engo.py'
+      - 'engo_provider.py'
+      - 'trigger_engo_validation.txt'
 
 jobs:
   validate:
