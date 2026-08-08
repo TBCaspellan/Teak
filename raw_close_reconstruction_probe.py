@@ -13,7 +13,7 @@ def get(s,path,params=None):
 
 
 def reconstruct(eod,actions):
-    x=pd.DataFrame(eod.get('rows') or eod.get('data') or eod.get('eod') or [])
+    x=pd.DataFrame(eod.get('bars') or eod.get('rows') or eod.get('data') or eod.get('eod') or [])
     if x.empty: raise RuntimeError('empty eod')
     x['date']=pd.to_datetime(x['date']).dt.normalize();x=x.sort_values('date').drop_duplicates('date').reset_index(drop=True)
     for c in ['open','high','low','close','volume']:x[c]=pd.to_numeric(x[c],errors='coerce')
@@ -23,14 +23,12 @@ def reconstruct(eod,actions):
         if a.get('unadjusted_value') is None:continue
         d=pd.Timestamp(a['date']).normalize();divs[d]=divs.get(d,0.0)+float(a['unadjusted_value'])
     raw=np.full(len(x),np.nan,dtype=float)
-    # Standard adjusted-close convention: final adjusted close equals final raw close.
     raw[-1]=float(x.loc[len(x)-1,'close'])
     for i in range(len(x)-1,0,-1):
         adj_t=float(x.loc[i,'close']);adj_prev=float(x.loc[i-1,'close'])
         if not np.isfinite(adj_t) or not np.isfinite(adj_prev) or adj_prev<=0 or adj_t<=0 or not np.isfinite(raw[i]):continue
         tr=adj_t/adj_prev
         d=x.loc[i,'date'];split=splits.get(d,1.0);div=divs.get(d,0.0)
-        # one old share becomes `split` new shares; dividend is as-paid per new share.
         raw[i-1]=split*(raw[i]+div)/tr
     x['raw_close_reconstructed']=raw
     valid=x[['low','high','raw_close_reconstructed']].dropna()
