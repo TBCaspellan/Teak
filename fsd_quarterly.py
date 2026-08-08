@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 CONCEPTS = {
-    'revenue_q': ('pnl','USD', ['RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet','Revenues','SalesRevenueServicesNet']),
+    'revenue_q': ('pnl','USD', ['RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet','Revenues','SalesRevenueGoodsNet','SalesRevenueServicesNet','RegulatedAndUnregulatedOperatingRevenue']),
     'gross_profit_q': ('pnl','USD', ['GrossProfit']),
     'cogs_q': ('pnl','USD', ['CostOfRevenue','CostOfGoodsAndServicesSold','CostOfGoodsSold','CostOfServices','CostOfServiceRevenue']),
     'op_income_q': ('pnl','USD',['OperatingIncomeLoss']),
