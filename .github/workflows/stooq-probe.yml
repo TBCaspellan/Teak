@@ -1,0 +1,26 @@
+name: Stooq historical-universe probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'stooq_probe.py'
+      - '.github/workflows/stooq-probe.yml'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install requests
+      - run: python stooq_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stooq-probe
+          path: stooq_probe_report.json
