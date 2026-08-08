@@ -35,19 +35,14 @@ class EngoPriceProvider:
 
     def _eod(self,ticker,start=None,end=None):
         """
-        Canonicalize Engo/EODHD daily bars without reconstructing raw prices from
-        corporate actions.
+        Canonicalize Engo/EODHD daily bars using the vendor's native semantics:
+          open/high/low/close = raw prices
+          adjusted_close     = split+dividend adjusted close
+          volume             = split-adjusted volume
 
-        Preferred vendor semantics are used directly when exposed:
-          close          -> raw_close
-          adjusted_close -> adj_close
-          volume         -> raw_volume
-
-        Previous code renamed `close` to `adj_close`, then tried to reverse all
-        corporate actions back to raw close. That was the source of the live OHLC
-        audit failures. We now preserve native raw close and native adjusted close
-        as separate fields. If no adjusted-close field is supplied, adjusted close
-        falls back to raw close and the row is explicitly marked RAW_ONLY.
+        Raw close is therefore taken directly from `close`; it is never rebuilt
+        from corporate actions. Split-adjusted vendor volume is retained separately
+        and converted back to raw volume only in `raw_history`.
         """
         params={}
         if start is not None: params['from']=str(pd.Timestamp(start).date())
@@ -62,19 +57,14 @@ class EngoPriceProvider:
         x=x.rename(columns={d:'date','close':'raw_close'})
         adj=next((c for c in ('adjusted_close','adj_close','adjustedclose') if c in x.columns),None)
         if adj is not None:
-            x=x.rename(columns={adj:'adj_close'})
-            x['adjustment_semantics']='VENDOR_ADJUSTED_CLOSE'
+            x=x.rename(columns={adj:'adj_close'});x['adjustment_semantics']='VENDOR_ADJUSTED_CLOSE'
         else:
-            x['adj_close']=x['raw_close']
-            x['adjustment_semantics']='RAW_ONLY_NO_ADJUSTED_CLOSE'
-        if 'adjusted_volume' in x.columns:
-            x=x.rename(columns={'adjusted_volume':'adj_volume'})
-        x['raw_volume']=pd.to_numeric(x['volume'],errors='coerce') if 'volume' in x.columns else np.nan
+            x['adj_close']=x['raw_close'];x['adjustment_semantics']='RAW_ONLY_NO_ADJUSTED_CLOSE'
+        x['split_adj_volume']=pd.to_numeric(x['volume'],errors='coerce') if 'volume' in x.columns else np.nan
         x['date']=pd.to_datetime(x['date'],errors='coerce').dt.tz_localize(None)
-        for c in ('open','high','low','raw_close','adj_close','raw_volume','adj_volume'):
+        for c in ('open','high','low','raw_close','adj_close','split_adj_volume'):
             if c in x:x[c]=pd.to_numeric(x[c],errors='coerce')
         x=x.dropna(subset=['date','raw_close','adj_close']).sort_values('date').drop_duplicates('date').reset_index(drop=True)
-        # Raw close must be inside native raw daily range when OHLC exists.
         if {'low','high'} <= set(x.columns):
             v=x[['low','high','raw_close']].dropna();v=v[v['high']>=v['low']]
             if len(v):
@@ -87,8 +77,17 @@ class EngoPriceProvider:
         r=self._get(f'/api/v1/lake/actions/{str(ticker).upper()}',allow_404=True)
         return None if r is None else r.json()
 
+    @staticmethod
+    def _split_rows(actions):
+        rows=[]
+        for a in (actions or {}).get('splits',[]):
+            try:d=pd.Timestamp(a['date']).normalize();ratio=float(a['ratio'])
+            except Exception:continue
+            if np.isfinite(ratio) and ratio>0:rows.append((d,ratio))
+        return sorted(rows)
+
     def history(self,ticker,start=None,end=None):
-        """Adjusted-close return history plus native raw OHLCV lineage."""
+        """Adjusted-close return history with native raw-price lineage."""
         x=self._eod(ticker,start,end)
         if x.empty:return x
         x=x.copy();x['price']=x['adj_close']
@@ -96,16 +95,28 @@ class EngoPriceProvider:
 
     def raw_history(self,ticker,start=None,end=None):
         """
-        Native raw close/raw volume for market-cap and dollar-volume features,
-        alongside vendor adjusted close for total-return/momentum features.
+        Native raw close plus raw trading volume for market-cap / dollar-volume
+        features, alongside vendor adjusted close for return features.
 
-        No corporate-action reversal is performed here. Actions remain a separate
-        input used by the model only to place SEC share counts on the signal-date
-        split basis.
+        EODHD volume is split-adjusted. To recover raw historical volume, divide
+        each observation by the product of splits occurring strictly after that
+        observation. This adjustment uses only split mechanics; dividends never
+        enter raw-price reconstruction because raw close is already supplied.
         """
-        x=self._eod(ticker,start,end)
+        # Pull through latest data so future splits relative to a historical signal
+        # can be reversed from the vendor's currently split-adjusted volume series.
+        x=self._eod(ticker,start,'2099-12-31')
         if x.empty:return x
-        x=x.copy();x['raw_reconstruction_method']='VENDOR_NATIVE_RAW_CLOSE_VOLUME'
+        acts=self.actions(ticker);splits=self._split_rows(acts)
+        factors=[]
+        for d in x.date:
+            f=1.0;dn=pd.Timestamp(d).normalize()
+            for sd,ratio in splits:
+                if sd>dn:f*=ratio
+            factors.append(f)
+        denom=pd.Series(factors,index=x.index,dtype=float).replace(0,np.nan)
+        x['raw_volume']=x['split_adj_volume']/denom
+        x['raw_reconstruction_method']='VENDOR_RAW_CLOSE_SPLIT_DEADJUSTED_VOLUME'
         if start is not None:x=x[x.date>=pd.Timestamp(start)]
         if end is not None:x=x[x.date<=pd.Timestamp(end)]
         return x.reset_index(drop=True)
