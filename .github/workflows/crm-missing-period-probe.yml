@@ -1,0 +1,25 @@
+name: Salesforce missing FSD periods probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/crm-missing-period-probe.yml'
+      - 'crm_missing_period_probe.py'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow duckdb
+      - run: python crm_missing_period_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crm-missing-period-probe
+          path: crm_missing_period_probe.json
+          if-no-files-found: warn
