@@ -1,7 +1,7 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from pathlib import Path
-import hashlib,json,time
+import hashlib,json
 import numpy as np
 import pandas as pd
 
@@ -12,6 +12,13 @@ from open_core_runtime import fundamental_raw,market_raw,finalize_raw
 
 SIGNAL=pd.Timestamp('2020-06-30');HISTORY_START=SIGNAL-pd.Timedelta(days=520);MAX_PER_FF48=3
 REQUIRED_Q_COLS=['revenue_q','cogs_q','op_income_q','net_income_q','cfo_q','capex_q','assets_q','cash_q','curr_assets_q','curr_liab_q','curr_debt_q','lt_debt_q','interest_q','shares_q']
+DIAG_Q_COLS=REQUIRED_Q_COLS+['gross_profit_q']
+RAW_DIAG_COLS=[
+ 'AQ_raw','RG_raw','GPG_raw','dOM_raw','dFCFM_raw','CE_raw','GM_raw','IM_raw','CQ_raw',
+ 'REVPS_raw','GPPS_raw','FCFPS_raw','GMP_level_raw','GMP_stability_raw',
+ 'ROICP_level_raw','ROICP_stability_raw','FCFS_level_raw','FCFS_stability_raw',
+ 'shares_signal_raw','ADV60_raw','RS6_raw','RS12_raw','HIGH_raw','IVOL_raw','MAX_raw','ACC_raw'
+]
 
 class CachedEngo(EngoPriceProvider):
     def __post_init__(self):super().__post_init__();self._action_cache={}
@@ -30,12 +37,25 @@ def ensure_q(q):
     return z
 
 def load_price(ticker):
-    last=None
-    for attempt in range(5):
-        try:
-            p=CachedEngo();return ticker,p.raw_history(ticker,HISTORY_START,SIGNAL),p.actions(ticker),None
-        except Exception as e:last=f'{type(e).__name__}: {e}';time.sleep(1.5*(attempt+1))
-    return ticker,pd.DataFrame(),None,last
+    try:
+        p=CachedEngo();h=p.raw_history(ticker,HISTORY_START,SIGNAL);a=p.actions(ticker)
+        semantics=None if h.empty or 'adjustment_semantics' not in h else h['adjustment_semantics'].mode().iloc[0]
+        return ticker,h,a,None,semantics
+    except Exception as e:
+        return ticker,pd.DataFrame(),None,f'{type(e).__name__}: {e}',None
+
+def q_coverage(qmap,sample):
+    rows=[]
+    for r in sample.itertuples():
+        cik=str(r.cik).zfill(10);q=qmap.get(cik,pd.DataFrame()).sort_values('datadate')
+        rec={'cik':cik,'ticker':str(r.ticker).upper(),'quarters':len(q)}
+        for c in DIAG_Q_COLS:
+            rec[c+'_obs']=int(q[c].notna().sum()) if c in q else 0
+            rec[c+'_last8_complete']=bool(len(q)>=8 and c in q and q[c].tail(8).notna().all())
+            rec[c+'_last10_complete']=bool(len(q)>=10 and c in q and q[c].tail(10).notna().all())
+        rec['cogs_derived_rows']=int(q.get('cogs_derived_from_gross_profit',pd.Series(dtype=bool)).fillna(False).sum()) if len(q) else 0
+        rows.append(rec)
+    return pd.DataFrame(rows)
 
 def main():
     outdir=Path('feature_coverage_audit_local');outdir.mkdir(exist_ok=True)
@@ -59,16 +79,17 @@ def main():
       ORDER BY s.cik,s.accepted,n.ddate,n.tag
     """).df();facts['cik']=facts.cik.astype(str).str.zfill(10);facts.to_parquet(outdir/'sample_fsd_facts.parquet',index=False)
     qmap={cik:ensure_q(quarterly_history_asof(g,SIGNAL)) for cik,g in facts.groupby('cik')}
+    qdiag=q_coverage(qmap,sample);qdiag.to_csv(outdir/'quarterly_field_coverage.csv',index=False)
 
-    ep=CachedEngo();spy=ep.raw_history('SPY',HISTORY_START,SIGNAL);prices={};actions={};price_errors={}
+    ep=CachedEngo();spy=ep.raw_history('SPY',HISTORY_START,SIGNAL);prices={};actions={};price_errors={};price_semantics={}
     with ThreadPoolExecutor(max_workers=8) as ex:
         fut={ex.submit(load_price,t):t for t in sample.ticker.astype(str).unique()}
         for f in as_completed(fut):
-            t,h,a,e=f.result();prices[t]=h;actions[t]=a
+            t,h,a,e,sem=f.result();prices[t]=h;actions[t]=a;price_semantics[t]=sem
             if e:price_errors[t]=e
     rows=[];exceptions=[]
     for r in sample.itertuples():
-        cik=str(r.cik).zfill(10);ticker=str(r.ticker).upper();q=qmap.get(cik,pd.DataFrame());base={'security_id':cik,'cik':cik,'ticker':ticker,'signal_date':SIGNAL,'sic':r.sic,'industry_code':r.industry_code,'engo_status':getattr(r,'status',None)}
+        cik=str(r.cik).zfill(10);ticker=str(r.ticker).upper();q=qmap.get(cik,pd.DataFrame());base={'security_id':cik,'cik':cik,'ticker':ticker,'signal_date':SIGNAL,'sic':r.sic,'industry_code':r.industry_code,'engo_status':getattr(r,'status',None),'price_semantics':price_semantics.get(ticker)}
         if q.empty:base.update({'eligible':False,'feature_error':'NO_FSD_QUARTERS'});rows.append(base);continue
         try:
             fr=fundamental_raw(q,actions.get(ticker),SIGNAL);base.update(fr);h=prices.get(ticker,pd.DataFrame());base.update(market_raw(h,spy,SIGNAL,fr.get('shares_signal_raw',np.nan)) if not h.empty else {});base['eligible']=bool(pd.notna(base.get('ADV60_raw')) and base['ADV60_raw']>=1_000_000);base['feature_error']=price_errors.get(ticker)
@@ -76,7 +97,14 @@ def main():
         rows.append(base)
     raw=pd.DataFrame(rows);raw.to_parquet(outdir/'raw_features.parquet',index=False);scored=finalize_raw(rows,spy);scored.to_parquet(outdir/'scored_features.parquet',index=False)
     comps=['F','Q','R_Q','M','D','FR','EB','LR','COS_OPEN','OFS_A_OPEN','OFS_B_OPEN']
-    report={'status':'PASS' if len(scored) and scored.get('OFS_A_OPEN',pd.Series(dtype=float)).notna().any() else 'FAIL','transport':'LOCAL_SEC_DUCKDB','qa_sample_max_per_ff48':MAX_PER_FF48,'signal_date':str(SIGNAL.date()),'identity_eligible_population':len(u),'stratified_sample_rows':len(sample),'ff48_industries_sampled':int(sample.industry_code.nunique()),'raw_rows':len(raw),'eligible_adv60_rows':int(raw.get('eligible',False).sum()),'price_errors':len(price_errors),'feature_exceptions':len(exceptions),'aq_mature_rows':int(scored.get('AQ_raw',pd.Series(dtype=float)).notna().sum()),'share_history_suspect_rows':int(scored.get('share_history_suspect',pd.Series(dtype=bool)).fillna(False).sum()),'component_nonmissing_rates':{c:float(scored[c].notna().mean()) if c in scored else 0.0 for c in comps},'scorable_rows':int(scored.get('scorable',pd.Series(dtype=bool)).fillna(False).sum()),'scorable_rate':float(scored.get('scorable',pd.Series(dtype=bool)).fillna(False).mean()) if len(scored) else 0.0,'feature_error_examples':list(dict.fromkeys(raw.get('feature_error',pd.Series(dtype=object)).dropna().astype(str)))[:20],'NO_FORWARD_OUTCOMES_ACCESSED':True}
+    raw_rates={c:float(raw[c].notna().mean()) if c in raw else 0.0 for c in RAW_DIAG_COLS}
+    q_last8={c:float(qdiag[c+'_last8_complete'].mean()) for c in DIAG_Q_COLS}
+    q_last10={c:float(qdiag[c+'_last10_complete'].mean()) for c in DIAG_Q_COLS}
+    sem_counts=raw.get('price_semantics',pd.Series(dtype=object)).fillna('NONE').value_counts().to_dict()
+    err_types={}
+    for e in price_errors.values():
+        k=e.split(':',1)[0];err_types[k]=err_types.get(k,0)+1
+    report={'status':'PASS' if len(scored) and scored.get('OFS_A_OPEN',pd.Series(dtype=float)).notna().any() else 'FAIL','transport':'LOCAL_SEC_DUCKDB','qa_sample_max_per_ff48':MAX_PER_FF48,'signal_date':str(SIGNAL.date()),'identity_eligible_population':len(u),'stratified_sample_rows':len(sample),'ff48_industries_sampled':int(sample.industry_code.nunique()),'raw_rows':len(raw),'eligible_adv60_rows':int(raw.get('eligible',False).sum()),'price_errors':len(price_errors),'price_error_types':err_types,'price_semantics_counts':sem_counts,'feature_exceptions':len(exceptions),'aq_mature_rows':int(scored.get('AQ_raw',pd.Series(dtype=float)).notna().sum()),'share_history_suspect_rows':int(scored.get('share_history_suspect',pd.Series(dtype=bool)).fillna(False).sum()),'component_nonmissing_rates':{c:float(scored[c].notna().mean()) if c in scored else 0.0 for c in comps},'raw_subfactor_nonmissing_rates':raw_rates,'quarterly_last8_complete_rates':q_last8,'quarterly_last10_complete_rates':q_last10,'cogs_derived_from_gross_profit_total_rows':int(qdiag.cogs_derived_rows.sum()),'scorable_rows':int(scored.get('scorable',pd.Series(dtype=bool)).fillna(False).sum()),'scorable_rate':float(scored.get('scorable',pd.Series(dtype=bool)).fillna(False).mean()) if len(scored) else 0.0,'feature_error_examples':list(dict.fromkeys(raw.get('feature_error',pd.Series(dtype=object)).dropna().astype(str)))[:20],'NO_FORWARD_OUTCOMES_ACCESSED':True}
     (outdir/'feature_coverage_report.json').write_text(json.dumps(report,indent=2,default=str),encoding='utf-8');print(json.dumps(report,indent=2,default=str))
     if report['status']!='PASS':raise SystemExit(1)
 if __name__=='__main__':main()
