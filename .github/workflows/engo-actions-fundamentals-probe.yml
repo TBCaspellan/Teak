@@ -1,0 +1,27 @@
+name: Engo actions and fundamentals probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/engo-actions-fundamentals-probe.yml'
+      - 'engo_actions_fundamentals_probe.py'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install requests
+      - run: python engo_actions_fundamentals_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engo-actions-fundamentals-probe
+          path: engo_actions_fundamentals_probe.json
+          if-no-files-found: warn
