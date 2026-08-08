@@ -64,8 +64,6 @@ def _safe_quarterly_history_asof(facts, signal_date):
         x = x[x['period_diff_days'] <= 45].copy()
         if x.empty:
             return pd.DataFrame()
-        # A non-empty candidate set means this is not the known empty-frame edge
-        # case, so fail closed rather than masking a real data-engine problem.
         raise
 
 
@@ -122,17 +120,26 @@ def _holm(ps):
     return out
 
 
+def _require_period_ic_schema(df, label):
+    required={'score','horizon_sessions','signal_date','spearman_ic'}
+    missing=sorted(required-set(df.columns))
+    if missing:
+        raise RuntimeError(f'{label} period-level IC schema mismatch; missing {missing}; columns={list(df.columns)}')
+    return df
+
+
 def accumulate():
     configure()
     s7.replicate()
     base_report_path=OUTDIR/'step7_temporal_replication_report.json'
     base=json.loads(base_report_path.read_text(encoding='utf-8'))
-    holdout_period=pd.read_csv(OUTDIR/'period_level_ic.csv')
+    holdout_period=_require_period_ic_schema(pd.read_csv(OUTDIR/'period_level_ic.csv'),'Step10 holdout')
     holdout_period['signal_date']=pd.to_datetime(holdout_period.signal_date).dt.normalize()
 
     prior_path=FROZEN_STEP7_DIR/'period_level_ic.csv'
     if not prior_path.exists():raise RuntimeError('Frozen Step 7 period-level IC file missing')
-    prior=pd.read_csv(prior_path);prior['signal_date']=pd.to_datetime(prior.signal_date).dt.normalize()
+    prior=_require_period_ic_schema(pd.read_csv(prior_path),'Frozen Step7')
+    prior['signal_date']=pd.to_datetime(prior.signal_date).dt.normalize()
     prior=prior[prior.signal_date!=pd.Timestamp('2020-06-30')].copy()
 
     expected_holdout=set(HOLDOUT_SIGNALS)
@@ -146,7 +153,7 @@ def accumulate():
         for h in HORIZONS:
             key=f'{score}_{h}'
             z=holdout_period[(holdout_period.score==score)&(holdout_period.horizon_sessions==h)]
-            vals=pd.to_numeric(z.ic,errors='coerce').dropna().to_numpy(float)
+            vals=pd.to_numeric(z['spearman_ic'],errors='coerce').dropna().to_numpy(float)
             p=_signflip_p(vals);primary_ps[key]=p
             primary[key]={
                 'score':score,'horizon_sessions':h,'new_holdout_period_count':int(len(vals)),
@@ -156,7 +163,7 @@ def accumulate():
                 'signflip_p_two_sided':p,'cluster_bootstrap_95ci_mean_ic':_boot_ci(vals,rng),
             }
             q=prior[(prior.score==score)&(prior.horizon_sessions==h)]
-            pvals=pd.to_numeric(q.ic,errors='coerce').dropna().to_numpy(float)
+            pvals=pd.to_numeric(q['spearman_ic'],errors='coerce').dropna().to_numpy(float)
             allv=np.concatenate([pvals,vals]);cp=_signflip_p(allv);combined_ps[key]=cp
             combined[key]={
                 'score':score,'horizon_sessions':h,
@@ -189,6 +196,7 @@ def accumulate():
         'all_new_holdout_periods_unused_in_steps_6_to_9':True,
         'primary_inference':'TWELVE_PREDECLARED_DECEMBER_HOLDOUT_COHORTS_ONLY',
         'secondary_accumulation':'EIGHT_PREVIOUSLY_UNSEEN_STEP7_JUNE_COHORTS_PLUS_TWELVE_NEW_DECEMBER_HOLDOUTS',
+        'period_ic_schema':'spearman_ic',
         'primary_holdout_tests':primary,
         'accumulated_20_period_tests':combined,
         'new_holdout_positive_mean_ic_test_count':holdout_positive,
