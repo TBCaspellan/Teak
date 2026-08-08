@@ -1,0 +1,25 @@
+name: SEC FSD tag discovery probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fsd-tag-probe.yml'
+      - 'fsd_tag_probe.py'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow duckdb
+      - run: python fsd_tag_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fsd-tag-probe
+          path: fsd_tag_probe.json
+          if-no-files-found: warn
