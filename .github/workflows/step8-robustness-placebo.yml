@@ -1,0 +1,56 @@
+name: Step 8 frozen robustness and placebo validation
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/step8-robustness-placebo.yml'
+      - 'step8_robustness_placebo.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  robustness-placebo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ENGO_API_KEY: ${{ secrets.ENGO_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      STEP7_FEATURE_ARTIFACT_ID: '9018361333'
+      STEP7_RESULT_ARTIFACT_ID: '9018382581'
+      STEP7_FEATURE_SHA256: '185eb160027bf9887f025ec9f9f3f8be69856dc77eac260eeb7d8ce8e6bd85ed'
+      STEP7_RESULT_SHA256: '5855c46700b4849e6ecbcb4c57d68df5aa8213459a4f9d9a8f88ac600442201e'
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Prove frozen formula/data engine unchanged since Step 6
+        run: |
+          git diff --exit-code c781f4e66a4d81636b3f3a4e998743b056cb577a -- \
+            config_open_core.py open_core_runtime.py open_core_engine.py fsd_quarterly.py engo_provider.py
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install numpy pandas pyarrow requests
+      - run: test -n "$ENGO_API_KEY" || (echo 'ENGO_API_KEY missing' && exit 2)
+      - name: Download and verify frozen Step 7 feature artifact
+        run: |
+          mkdir -p step7_features
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP7_FEATURE_ARTIFACT_ID}/zip > step7_features.zip
+          echo "${STEP7_FEATURE_SHA256}  step7_features.zip" | sha256sum -c -
+          unzip -q step7_features.zip -d step7_features
+          test -f step7_features/scored_snapshots.parquet
+          test -f step7_features/step7_feature_manifest.json
+      - name: Download and verify frozen Step 7 replication artifact
+        run: |
+          mkdir -p step7_temporal_replication
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP7_RESULT_ARTIFACT_ID}/zip > step7_results.zip
+          echo "${STEP7_RESULT_SHA256}  step7_results.zip" | sha256sum -c -
+          unzip -q step7_results.zip -d step7_temporal_replication
+          test -f step7_temporal_replication/temporal_joined_scores_outcomes.parquet
+          test -f step7_temporal_replication/step7_temporal_replication_report.json
+      - name: Run predeclared robustness and placebo tests without optimization
+        run: python step8_robustness_placebo.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step8-frozen-robustness-placebo-results
+          path: step8_robustness_placebo/
+          if-no-files-found: warn
