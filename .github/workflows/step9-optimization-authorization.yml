@@ -1,0 +1,51 @@
+name: Step 9 frozen optimization authorization gate
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/step9-optimization-authorization.yml'
+      - 'step9_optimization_authorization.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  authorization-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STEP7_RESULT_ARTIFACT_ID: '9018382581'
+      STEP7_RESULT_SHA256: '5855c46700b4849e6ecbcb4c57d68df5aa8213459a4f9d9a8f88ac600442201e'
+      STEP8_ARTIFACT_ID: '9022892871'
+      STEP8_SHA256: 'b882f001d8110975059a7d775ee0f073d2eb31652b4f18a27a6f8e0e07c91a3d'
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Prove frozen formula/data engine unchanged since Step 6
+        run: |
+          git diff --exit-code c781f4e66a4d81636b3f3a4e998743b056cb577a -- \
+            config_open_core.py open_core_runtime.py open_core_engine.py fsd_quarterly.py engo_provider.py
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Download and verify frozen Step 7 temporal replication results
+        run: |
+          mkdir -p step7_results
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP7_RESULT_ARTIFACT_ID}/zip > step7.zip
+          echo "${STEP7_RESULT_SHA256}  step7.zip" | sha256sum -c -
+          unzip -q step7.zip -d step7_results
+          test -f step7_results/step7_temporal_replication_report.json
+      - name: Download and verify frozen Step 8 robustness/placebo results
+        run: |
+          mkdir -p step8_results
+          gh api /repos/${{ github.repository }}/actions/artifacts/${STEP8_ARTIFACT_ID}/zip > step8.zip
+          echo "${STEP8_SHA256}  step8.zip" | sha256sum -c -
+          unzip -q step8.zip -d step8_results
+          test -f step8_results/step8_robustness_placebo_report.json
+      - name: Execute governance decision only; no optimization code
+        run: python step9_optimization_authorization.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step9-optimization-authorization-decision
+          path: step9_optimization_authorization/
+          if-no-files-found: warn
