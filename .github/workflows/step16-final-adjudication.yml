@@ -1,0 +1,28 @@
+name: Step 16 final prospective adjudication setup
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'step16_final_adjudication_protocol.json'
+      - 'step16_final_adjudication.py'
+      - '.github/workflows/step16-final-adjudication.yml'
+permissions:
+  contents: read
+jobs:
+  final-adjudication-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Prove frozen formula/data engine unchanged
+        run: |
+          git diff --exit-code c781f4e66a4d81636b3f3a4e998743b056cb577a -- \
+            config_open_core.py open_core_runtime.py open_core_engine.py fsd_quarterly.py engo_provider.py
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Validate final-adjudication protocol without loading alpha tables
+        run: python step16_final_adjudication.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: step16-final-adjudication-setup
+          path: step16_final_adjudication/
