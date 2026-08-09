@@ -1,0 +1,32 @@
+name: Step 12 prospective shadow governance audit
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 23 * * 5'
+  push:
+    paths:
+      - '.github/workflows/step12-shadow-governance.yml'
+      - 'step12_shadow_governance.py'
+      - 'step11_prospective_protocol.json'
+      - '.github/workflows/step11-prospective-shadow.yml'
+      - 'prospective_snapshots/**'
+      - 'prospective_evidence/**'
+permissions:
+  contents: read
+jobs:
+  governance-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow
+      - name: Audit frozen prospective shadow governance without alpha testing
+        run: python step12_shadow_governance.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step12-shadow-governance-report
+          path: step12_shadow_governance_report.json
+          if-no-files-found: warn
