@@ -1,0 +1,31 @@
+name: Step 13 prospective operational resilience validation
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/step13-operational-resilience.yml'
+      - 'step13_operational_resilience.py'
+permissions:
+  contents: read
+jobs:
+  operational-resilience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Prove frozen formula/data engine unchanged since blind-validation freeze
+        run: |
+          git diff --exit-code c781f4e66a4d81636b3f3a4e998743b056cb577a -- \
+            config_open_core.py open_core_runtime.py open_core_engine.py fsd_quarterly.py engo_provider.py
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install pandas pyarrow
+      - name: Run Step 13 resilience and recovery audit without alpha testing
+        run: python step13_operational_resilience.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step13-operational-resilience-report
+          path: step13_operational_resilience/
+          if-no-files-found: warn
