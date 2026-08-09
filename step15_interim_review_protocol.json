@@ -1,0 +1,21 @@
+{
+  "step": 15,
+  "protocol": "PROSPECTIVE_INTERIM_EVIDENCE_REVIEWS",
+  "depends_on": "step11_prospective_protocol.json",
+  "review_trigger": "ONLY_WHEN_A_PREDECLARED_HORIZON_HAS_MATURED_FOR_AT_LEAST_ONE_CAPTURED_COHORT",
+  "scores": ["OFS_A_OPEN", "OFS_B_OPEN"],
+  "horizons_sessions": [21, 63, 126, 252],
+  "primary_statistic": "PER_COHORT_SPEARMAN_IC_VS_EXCESS_RETURN",
+  "reporting_policy": "REPORT_ALL_MATURED_PREDECLARED_SCORE_HORIZON_RESULTS_WITHOUT_SELECTION",
+  "interim_results_may_be_observed": true,
+  "interim_results_may_change_formula": false,
+  "interim_results_may_authorize_optimization": false,
+  "weight_optimization_permitted": false,
+  "threshold_optimization_permitted": false,
+  "horizon_selection_permitted": false,
+  "score_variant_selection_permitted": false,
+  "portfolio_rule_selection_permitted": false,
+  "winner_loser_selection_permitted": false,
+  "step9_do_not_optimize_remains_binding": true,
+  "final_adjudication_reserved_for_step16": true
+}
