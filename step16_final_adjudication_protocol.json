@@ -1,0 +1,26 @@
+{
+  "step": 16,
+  "protocol": "FINAL_PROSPECTIVE_ADJUDICATION",
+  "depends_on": ["step11_prospective_protocol.json", "step15_interim_review_protocol.json"],
+  "adjudication_trigger": "ONLY_WHEN_STEP11_FINAL_COMPLETE_IS_TRUE",
+  "required_cohorts": 8,
+  "required_horizon_sessions": 252,
+  "scores": ["OFS_A_OPEN", "OFS_B_OPEN"],
+  "horizons_sessions": [21, 63, 126, 252],
+  "primary_statistic": "PER_COHORT_SPEARMAN_IC_VS_EXCESS_RETURN",
+  "decision_options": ["AUTHORIZE_CONTROLLED_OPTIMIZATION", "CONTINUE_FROZEN_EVIDENCE_ACCUMULATION", "REJECT_PREDICTIVE_USE"],
+  "authorization_requirements": {
+    "mean_period_ic_positive": true,
+    "cluster_bootstrap_95ci_lower_bound_gt_zero": true,
+    "positive_ic_fraction_min": 0.75,
+    "leave_one_cohort_out_mean_ic_all_positive": true,
+    "no_material_censoring_bias": true,
+    "no_integrity_or_governance_violation": true
+  },
+  "multiple_testing_policy": "HOLM_ACROSS_8_OFS_SCORE_X_HORIZON_PRIMARY_TESTS",
+  "authorization_rule": "AT_LEAST_ONE_PREDECLARED_SCORE_HORIZON_MUST_CLEAR_EVERY_AUTHORIZATION_REQUIREMENT",
+  "failure_to_authorize_does_not_imply_rejection": true,
+  "reject_rule": "REJECT_ONLY_IF_PROSPECTIVE_EVIDENCE_IS CONSISTENTLY NONPOSITIVE_OR GOVERNANCE_INTEGRITY_FAILS",
+  "step9_do_not_optimize_remains_binding_until_final_authorization": true,
+  "no_posthoc_metric_or_horizon_selection": true
+}
